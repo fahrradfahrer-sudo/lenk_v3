@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- u-blox ZED-F9P -->
+    <usb-device vendor-id="4348" product-id="5523" /> <!-- Example IDs, often CH340 or similar -->
+    <usb-device vendor-id="5446" product-id="423" />  <!-- u-blox AG -->
+</resources>
