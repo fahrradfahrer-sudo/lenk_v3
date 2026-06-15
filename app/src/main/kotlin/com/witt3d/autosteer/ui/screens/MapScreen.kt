@@ -9,6 +9,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import com.witt3d.autosteer.data.models.GpsFixStatus
 import com.witt3d.autosteer.ui.components.CustomGridViewer
 import com.witt3d.autosteer.viewmodel.MainViewModel
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -37,13 +38,13 @@ fun MapScreen(viewModel: MainViewModel = viewModel()) {
 }
 
 @Composable
-fun statusColor(status: com.witt3d.autosteer.data.models.GpsFixStatus): Color {
+fun statusColor(status: GpsFixStatus): Color {
     return when (status) {
-        com.witt3d.autosteer.data.models.GpsFixStatus.RTK_FIX -> Color.Green
-        com.witt3d.autosteer.data.models.GpsFixStatus.FLOAT -> Color.Yellow
-        com.witt3d.autosteer.data.models.GpsFixStatus.FIX -> Color.Cyan
-        com.witt3d.autosteer.data.models.GpsFixStatus.DGPS -> Color.Blue
-        com.witt3d.autosteer.data.models.GpsFixStatus.NO_FIX -> Color.Red
+        GpsFixStatus.RTK_FIX -> Color.Green
+        GpsFixStatus.FLOAT -> Color.Yellow
+        GpsFixStatus.FIX -> Color.Cyan
+        GpsFixStatus.DGPS -> Color.Blue
+        GpsFixStatus.NO_FIX -> Color.Red
     }
 }
 
