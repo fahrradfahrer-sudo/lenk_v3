@@ -63,7 +63,7 @@ class ImuHandler {
             connection.connect(currentConfig.host, currentConfig.port)
 
             // Auto-discovery via enumeration listener if UID is not explicitly provided
-            connection.addEnumerateListener { uid, _, _, _, deviceIdentifier, enumerationType ->
+            connection.addEnumerateListener { uid, _, _, _, _, deviceIdentifier, _ ->
                 if (deviceIdentifier == BrickIMUV2.DEVICE_IDENTIFIER) {
                     Log.d(TAG, "Discovered IMU Brick v2 with UID: $uid")
                     if (_config.value.uid.isEmpty() || _config.value.uid == uid) {
