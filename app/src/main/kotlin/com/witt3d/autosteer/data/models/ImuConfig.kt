@@ -5,5 +5,6 @@ data class ImuConfig(
     val port: Int = 4223,
     val uid: String = "",
     val isSimulationMode: Boolean = false,
-    val isConnected: Boolean = false
+    val isConnected: Boolean = false,
+    val errorMessage: String? = null
 )

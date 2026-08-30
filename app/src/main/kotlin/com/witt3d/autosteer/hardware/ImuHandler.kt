@@ -38,51 +38,62 @@ class ImuHandler {
 
     fun updateConfig(newConfig: ImuConfig) {
         val oldConfig = _config.value
-        _config.value = newConfig
+        _config.value = newConfig.copy(errorMessage = null)
 
-        if (oldConfig.isSimulationMode != newConfig.isSimulationMode) {
+        if (oldConfig.isSimulationMode != newConfig.isSimulationMode ||
+            oldConfig.host != newConfig.host ||
+            oldConfig.port != newConfig.port ||
+            oldConfig.uid != newConfig.uid) {
             disconnect()
             connect()
         }
     }
 
     fun connect() {
-        val currentConfig = _config.value
-        if (currentConfig.isSimulationMode) {
-            startSimulation()
-            _config.value = currentConfig.copy(isConnected = true)
-            Log.d(TAG, "Started Simulated IMU Mode")
-            return
-        }
+        scope.launch(Dispatchers.IO) {
+            val currentConfig = _config.value
+            if (currentConfig.isSimulationMode) {
+                startSimulation()
+                _config.value = currentConfig.copy(isConnected = true, errorMessage = null)
+                Log.d(TAG, "Started Simulated IMU Mode")
+                return@launch
+            }
 
-        stopSimulation()
+            stopSimulation()
 
-        try {
-            val connection = IPConnection()
-            ipcon = connection
-            connection.connect(currentConfig.host, currentConfig.port)
+            try {
+                // Close existing connection if any
+                try {
+                    ipcon?.disconnect()
+                } catch (_: Exception) {}
 
-            // Auto-discovery via enumeration listener if UID is not explicitly provided
-            connection.addEnumerateListener { uid, _, _, _, _, deviceIdentifier, _ ->
-                if (deviceIdentifier == BrickIMUV2.DEVICE_IDENTIFIER) {
-                    Log.d(TAG, "Discovered IMU Brick v2 with UID: $uid")
-                    if (_config.value.uid.isEmpty() || _config.value.uid == uid) {
-                        setupImuDevice(connection, uid)
+                val connection = IPConnection()
+                ipcon = connection
+                connection.connect(currentConfig.host, currentConfig.port)
+
+                // Auto-discovery via enumeration listener if UID is not explicitly provided
+                connection.addEnumerateListener { uid, _, _, _, _, deviceIdentifier, _ ->
+                    if (deviceIdentifier == BrickIMUV2.DEVICE_IDENTIFIER) {
+                        Log.d(TAG, "Discovered IMU Brick v2 with UID: $uid")
+                        if (_config.value.uid.isEmpty() || _config.value.uid == uid) {
+                            setupImuDevice(connection, uid)
+                        }
                     }
                 }
-            }
 
-            if (currentConfig.uid.isNotEmpty()) {
-                setupImuDevice(connection, currentConfig.uid)
-            } else {
-                connection.enumerate()
-            }
+                if (currentConfig.uid.isNotEmpty()) {
+                    setupImuDevice(connection, currentConfig.uid)
+                } else {
+                    connection.enumerate()
+                }
 
-            _config.value = _config.value.copy(isConnected = true)
-            Log.d(TAG, "Connected to Tinkerforge at ${currentConfig.host}:${currentConfig.port}")
-        } catch (e: Exception) {
-            Log.e(TAG, "Error connecting to Tinkerforge IMU Brick v2", e)
-            _config.value = _config.value.copy(isConnected = false)
+                _config.value = _config.value.copy(isConnected = true, errorMessage = null)
+                Log.d(TAG, "Connected to Tinkerforge at ${currentConfig.host}:${currentConfig.port}")
+            } catch (e: Exception) {
+                val errorMsg = "Connection failed (${currentConfig.host}:${currentConfig.port}): ${e.localizedMessage ?: e.message ?: "Unknown error"}"
+                Log.e(TAG, "Error connecting to Tinkerforge IMU Brick v2", e)
+                _config.value = _config.value.copy(isConnected = false, errorMessage = errorMsg)
+            }
         }
     }
 
@@ -90,7 +101,7 @@ class ImuHandler {
         try {
             val brick = BrickIMUV2(uid, connection)
             imu = brick
-            _config.value = _config.value.copy(uid = uid)
+            _config.value = _config.value.copy(uid = uid, errorMessage = null)
 
             // Register Orientation Listener (heading, roll, pitch in 1/16 deg units)
             brick.addOrientationListener { heading, roll, pitch ->
@@ -123,20 +134,24 @@ class ImuHandler {
 
             Log.d(TAG, "IMU Brick v2 initialized with UID: $uid")
         } catch (e: Exception) {
+            val errorMsg = "Failed to setup BrickIMUV2 ($uid): ${e.localizedMessage ?: e.message}"
             Log.e(TAG, "Failed to initialize BrickIMUV2 with UID: $uid", e)
+            _config.value = _config.value.copy(errorMessage = errorMsg)
         }
     }
 
     fun disconnect() {
         stopSimulation()
-        try {
-            imu = null
-            ipcon?.disconnect()
-            ipcon = null
-            _config.value = _config.value.copy(isConnected = false)
-            Log.d(TAG, "Disconnected IMU Handler")
-        } catch (e: Exception) {
-            Log.e(TAG, "Error disconnecting IMU Handler", e)
+        scope.launch(Dispatchers.IO) {
+            try {
+                imu = null
+                ipcon?.disconnect()
+                ipcon = null
+                _config.value = _config.value.copy(isConnected = false)
+                Log.d(TAG, "Disconnected IMU Handler")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error disconnecting IMU Handler", e)
+            }
         }
     }
 
