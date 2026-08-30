@@ -5,13 +5,11 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.hardware.usb.UsbDevice
-import android.hardware.usb.UsbManager
+import android.hardware.usb.*
 import android.os.Build
 import android.util.Log
 import com.hoho.android.usbserial.driver.CdcAcmSerialDriver
 import com.hoho.android.usbserial.driver.ProbeTable
-import com.hoho.android.usbserial.driver.UsbSerialPort
 import com.hoho.android.usbserial.driver.UsbSerialProber
 import com.tinkerforge.BrickIMUV2
 import com.tinkerforge.IPConnection
@@ -39,7 +37,7 @@ class ImuHandler {
 
     private var simulationJob: Job? = null
     private var usbDirectJob: Job? = null
-    private var usbSerialPort: UsbSerialPort? = null
+    private var usbConnection: UsbDeviceConnection? = null
 
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
@@ -79,26 +77,22 @@ class ImuHandler {
     fun scanUsbDevices(context: Context): List<UsbDevice> {
         val usbManager = context.getSystemService(Context.USB_SERVICE) as? UsbManager ?: return emptyList()
         val deviceList = usbManager.deviceList
-        val tinkerforgeOrSerialDevices = mutableListOf<UsbDevice>()
-
-        val prober = getCustomUsbProber()
+        val tinkerforgeDevices = mutableListOf<UsbDevice>()
 
         for ((_, device) in deviceList) {
             val isTinkerforge = device.vendorId == 5840 || device.vendorId == 0x16D0
-            val isSerial = prober.probeDevice(device) != null
-
-            if (isTinkerforge || isSerial) {
-                tinkerforgeOrSerialDevices.add(device)
+            if (isTinkerforge) {
+                tinkerforgeDevices.add(device)
             }
         }
 
-        val firstDevice = tinkerforgeOrSerialDevices.firstOrNull()
+        val firstDevice = tinkerforgeDevices.firstOrNull()
         if (firstDevice != null) {
             val hasPerm = usbManager.hasPermission(firstDevice)
             val devName = "${firstDevice.manufacturerName ?: "Tinkerforge"} (${firstDevice.productName ?: "IMU Brick 2.0"})"
             _config.value = _config.value.copy(
                 usbDeviceDetected = true,
-                usbDeviceName = if (hasPerm) devName else "$devName (Permission Required)"
+                usbDeviceName = if (hasPerm) "$devName (Granted)" else "$devName (Permission Required)"
             )
             Log.d(TAG, "Detected USB IMU Device: $devName, Has Permission: $hasPerm")
 
@@ -112,13 +106,13 @@ class ImuHandler {
             )
         }
 
-        return tinkerforgeOrSerialDevices
+        return tinkerforgeDevices
     }
 
     private fun requestUsbPermission(context: Context, usbManager: UsbManager, device: UsbDevice) {
         try {
-            val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
             } else {
                 PendingIntent.FLAG_UPDATE_CURRENT
             }
@@ -176,51 +170,66 @@ class ImuHandler {
     }
 
     /**
-     * Tries opening a direct USB Serial connection to the IMU Brick 2.0 when connected via USB C / Hub.
+     * Tries connecting directly to the Tinkerforge IMU Brick 2.0 using native Android USB Host Bulk Transfers.
      */
     private suspend fun tryConnectUsbDirect(context: Context): Boolean = withContext(Dispatchers.IO) {
         val usbManager = context.getSystemService(Context.USB_SERVICE) as? UsbManager ?: return@withContext false
-        val prober = getCustomUsbProber()
-        val availableDrivers = prober.findAllDrivers(usbManager)
+        val device = usbManager.deviceList.values.firstOrNull { it.vendorId == 5840 || it.vendorId == 0x16D0 }
+            ?: return@withContext false
 
-        val driver = availableDrivers.firstOrNull { d ->
-            d.device.vendorId == 5840 || d.device.vendorId == 0x16D0 || d.ports.isNotEmpty()
-        } ?: return@withContext false
-
-        if (!usbManager.hasPermission(driver.device)) {
-            Log.w(TAG, "USB permission missing for device: ${driver.device.deviceName}")
-            requestUsbPermission(context, usbManager, driver.device)
+        if (!usbManager.hasPermission(device)) {
+            Log.w(TAG, "USB permission missing for device: ${device.deviceName}")
+            requestUsbPermission(context, usbManager, device)
             return@withContext false
         }
 
-        val connection = usbManager.openDevice(driver.device) ?: run {
-            Log.w(TAG, "Could not open USB device connection")
+        val connection = usbManager.openDevice(device) ?: run {
+            Log.w(TAG, "Could not open UsbDeviceConnection")
             return@withContext false
         }
 
-        val serialPort = driver.ports.firstOrNull() ?: return@withContext false
-        try {
-            serialPort.open(connection)
-            serialPort.setParameters(115200, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
-            usbSerialPort = serialPort
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to open USB serial port", e)
+        val usbInterface = device.getInterface(0)
+        if (!connection.claimInterface(usbInterface, true)) {
+            Log.w(TAG, "Could not claim USB Interface 0")
+            connection.close()
             return@withContext false
         }
 
-        Log.d(TAG, "Direct USB Serial connection established to IMU Brick v2")
+        var endpointIn: UsbEndpoint? = null
+        var endpointOut: UsbEndpoint? = null
 
-        // Build and send 'Set Orientation Period' packet (Function ID 22, Period 50ms)
+        for (i in 0 until usbInterface.endpointCount) {
+            val ep = usbInterface.getEndpoint(i)
+            if (ep.type == UsbConstants.USB_ENDPOINT_XFER_BULK) {
+                if (ep.direction == UsbConstants.USB_DIR_IN) {
+                    endpointIn = ep
+                } else if (ep.direction == UsbConstants.USB_DIR_OUT) {
+                    endpointOut = ep
+                }
+            }
+        }
+
+        if (endpointIn == null || endpointOut == null) {
+            Log.e(TAG, "Bulk endpoints not found on USB device")
+            connection.releaseInterface(usbInterface)
+            connection.close()
+            return@withContext false
+        }
+
+        usbConnection = connection
+        Log.d(TAG, "Direct Native USB Bulk Transfer connection established to IMU Brick v2")
+
+        // Build 'Set Orientation Period' packet (Function ID 22, Period = 50ms)
         val periodPacket = ByteBuffer.allocate(12).order(ByteOrder.LITTLE_ENDIAN).apply {
             putInt(0) // UID = 0 (broadcast)
-            put(12.toByte()) // Length = 12 bytes
+            put(12.toByte()) // Length = 12
             put(22.toByte()) // Function ID 22 = SET_ORIENTATION_PERIOD
             put(0.toByte())  // Sequence / Options
             put(0.toByte())  // Error
             putInt(50)       // Period = 50ms (20Hz)
         }.array()
 
-        // Build and send 'Set Linear Acceleration Period' packet (Function ID 24, Period 50ms)
+        // Build 'Set Linear Acceleration Period' packet (Function ID 24, Period = 50ms)
         val accelPeriodPacket = ByteBuffer.allocate(12).order(ByteOrder.LITTLE_ENDIAN).apply {
             putInt(0)
             put(12.toByte())
@@ -231,27 +240,27 @@ class ImuHandler {
         }.array()
 
         try {
-            serialPort.write(periodPacket, 1000)
-            serialPort.write(accelPeriodPacket, 1000)
+            connection.bulkTransfer(endpointOut, periodPacket, periodPacket.size, 1000)
+            connection.bulkTransfer(endpointOut, accelPeriodPacket, accelPeriodPacket.size, 1000)
         } catch (e: Exception) {
-            Log.e(TAG, "Error configuring USB IMU periods", e)
+            Log.e(TAG, "Error sending USB IMU configuration packets", e)
         }
 
-        // Start background USB reader loop
+        // Start background USB Bulk Reader Loop
         usbDirectJob?.cancel()
         usbDirectJob = scope.launch(Dispatchers.IO) {
-            val readBuffer = ByteArray(1024)
+            val readBuffer = ByteArray(256)
             val packetBuffer = ByteArray(2048)
             var packetBufLen = 0
 
             while (isActive) {
                 try {
-                    val read = serialPort.read(readBuffer, 200)
+                    val read = connection.bulkTransfer(endpointIn, readBuffer, readBuffer.size, 200)
                     if (read > 0) {
                         System.arraycopy(readBuffer, 0, packetBuffer, packetBufLen, read)
                         packetBufLen += read
 
-                        // Parse full Tinkerforge packets from buffer
+                        // Parse full Tinkerforge packets
                         while (packetBufLen >= 8) {
                             val packetLen = packetBuffer[4].toInt() and 0xFF
                             if (packetLen < 8 || packetLen > 256) {
@@ -270,6 +279,7 @@ class ImuHandler {
                             }
                         }
                     } else {
+                        // Request periodic orientation update if callbacks are idle
                         val getOrientationPacket = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).apply {
                             putInt(0)
                             put(8.toByte())
@@ -277,10 +287,10 @@ class ImuHandler {
                             put(0.toByte())
                             put(0.toByte())
                         }.array()
-                        serialPort.write(getOrientationPacket, 200)
+                        connection.bulkTransfer(endpointOut, getOrientationPacket, getOrientationPacket.size, 200)
                     }
                 } catch (e: Exception) {
-                    if (isActive) Log.e(TAG, "Error reading USB IMU stream", e)
+                    if (isActive) Log.e(TAG, "Error reading native USB IMU bulk stream", e)
                     delay(100)
                 }
             }
@@ -290,7 +300,7 @@ class ImuHandler {
     }
 
     private fun parseTinkerforgeUsbPacket(data: ByteArray, length: Int, functionId: Int) {
-        if ((functionId == 38 || functionId == 5) && length >= 14) {
+        if ((functionId == 38 || functionId == 5) && length >= 14) { // CALLBACK_ORIENTATION = 38 or GET_ORIENTATION = 5
             val bb = ByteBuffer.wrap(data, 8, 6).order(ByteOrder.LITTLE_ENDIAN)
             val heading = bb.short / 16.0
             val roll = bb.short / 16.0
@@ -310,7 +320,7 @@ class ImuHandler {
                     accelZ = currentAccelZ
                 )
             )
-        } else if ((functionId == 36 || functionId == 6) && length >= 14) {
+        } else if ((functionId == 36 || functionId == 6) && length >= 14) { // CALLBACK_LINEAR_ACCELERATION = 36
             val bb = ByteBuffer.wrap(data, 8, 6).order(ByteOrder.LITTLE_ENDIAN)
             currentAccelX = bb.short / 100.0
             currentAccelY = bb.short / 100.0
@@ -338,12 +348,12 @@ class ImuHandler {
 
             stopSimulation()
 
-            // Step 1: If host is localhost/127.0.0.1 and context is available, attempt USB Direct connection
+            // Step 1: If host is localhost/127.0.0.1 and context is available, attempt native Direct USB Bulk Transfer connection
             if ((currentConfig.host == "127.0.0.1" || currentConfig.host == "localhost") && context != null) {
                 val usbDirectSuccess = tryConnectUsbDirect(context)
                 if (usbDirectSuccess) {
                     _config.value = currentConfig.copy(isConnected = true, errorMessage = null)
-                    Log.d(TAG, "Successfully connected to IMU Brick v2 via Direct USB Serial")
+                    Log.d(TAG, "Successfully connected to IMU Brick v2 via Native USB Bulk Transfer")
                     return@launch
                 }
             }
@@ -445,8 +455,8 @@ class ImuHandler {
         usbDirectJob = null
 
         try {
-            usbSerialPort?.close()
-            usbSerialPort = null
+            usbConnection?.close()
+            usbConnection = null
         } catch (_: Exception) {}
     }
 
