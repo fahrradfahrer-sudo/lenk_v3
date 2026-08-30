@@ -1,5 +1,6 @@
 package com.witt3d.autosteer.viewmodel
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import com.witt3d.autosteer.data.models.ImuConfig
 import com.witt3d.autosteer.data.models.TelemetryData
@@ -28,6 +29,10 @@ class MainViewModel : ViewModel() {
         }
         // Auto-connect IMU handler on ViewModel creation
         imuHandler.connect()
+    }
+
+    fun scanUsbDevices(context: Context) {
+        imuHandler.scanUsbDevices(context)
     }
 
     fun updateTelemetry(newData: TelemetryData) {

@@ -6,6 +6,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.witt3d.autosteer.ui.components.ImuVisualizer3D
@@ -13,6 +14,7 @@ import com.witt3d.autosteer.viewmodel.MainViewModel
 
 @Composable
 fun SettingsScreen(viewModel: MainViewModel = viewModel()) {
+    val context = LocalContext.current
     val telemetry by viewModel.telemetry.collectAsState()
     val imuConfig by viewModel.imuConfig.collectAsState()
 
@@ -29,6 +31,10 @@ fun SettingsScreen(viewModel: MainViewModel = viewModel()) {
     var simHeading by remember { mutableStateOf(0f) }
     var simAccelX by remember { mutableStateOf(0f) }
     var simAccelY by remember { mutableStateOf(0f) }
+
+    LaunchedEffect(Unit) {
+        viewModel.scanUsbDevices(context)
+    }
 
     LazyColumn(
         modifier = Modifier
@@ -64,11 +70,21 @@ fun SettingsScreen(viewModel: MainViewModel = viewModel()) {
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = if (imuConfig.isConnected) "Status: Connected ${if (imuConfig.isSimulationMode) "(Simulated)" else ""}" else "Status: Disconnected",
-                        color = if (imuConfig.isConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
-                    )
+                    Column {
+                        Text(
+                            text = if (imuConfig.isConnected) "Status: Connected ${if (imuConfig.isSimulationMode) "(Simulated)" else ""}" else "Status: Disconnected",
+                            color = if (imuConfig.isConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                        )
+                        Text(
+                            text = if (imuConfig.usbDeviceDetected) "USB: ${imuConfig.usbDeviceName ?: "Detected"}" else "USB: No USB device detected",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (imuConfig.usbDeviceDetected) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.outline
+                        )
+                    }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = { viewModel.scanUsbDevices(context) }) {
+                            Text("Scan USB")
+                        }
                         if (imuConfig.isConnected) {
                             Button(onClick = { viewModel.disconnectImu() }) {
                                 Text("Disconnect")
@@ -109,7 +125,7 @@ fun SettingsScreen(viewModel: MainViewModel = viewModel()) {
                             hostText = it
                             viewModel.updateImuConfig(imuConfig.copy(host = it))
                         },
-                        label = { Text("Host") },
+                        label = { Text("Host IP / Hostname") },
                         modifier = Modifier.weight(1.5f)
                     )
                     OutlinedTextField(

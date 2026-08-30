@@ -6,5 +6,7 @@ data class ImuConfig(
     val uid: String = "",
     val isSimulationMode: Boolean = false,
     val isConnected: Boolean = false,
+    val usbDeviceDetected: Boolean = false,
+    val usbDeviceName: String? = null,
     val errorMessage: String? = null
 )

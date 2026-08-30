@@ -1,6 +1,10 @@
 package com.witt3d.autosteer.hardware
 
+import android.content.Context
+import android.hardware.usb.UsbDevice
+import android.hardware.usb.UsbManager
 import android.util.Log
+import com.hoho.android.usbserial.driver.UsbSerialProber
 import com.tinkerforge.BrickIMUV2
 import com.tinkerforge.IPConnection
 import com.witt3d.autosteer.data.models.ImuConfig
@@ -34,6 +38,42 @@ class ImuHandler {
 
     fun setTelemetryListener(listener: (TelemetryData) -> Unit) {
         onTelemetryUpdate = listener
+    }
+
+    /**
+     * Scans for attached USB devices (such as Tinkerforge Bricks VID 5840 / 0x16D0 or USB Serial controllers).
+     */
+    fun scanUsbDevices(context: Context): List<UsbDevice> {
+        val usbManager = context.getSystemService(Context.USB_SERVICE) as? UsbManager ?: return emptyList()
+        val deviceList = usbManager.deviceList
+        val tinkerforgeOrSerialDevices = mutableListOf<UsbDevice>()
+
+        for ((_, device) in deviceList) {
+            // Tinkerforge Vendor ID: 5840 (0x16D0) or USB CDC/Serial drivers
+            val isTinkerforge = device.vendorId == 5840 || device.vendorId == 0x16D0
+            val isSerial = UsbSerialProber.getDefaultProber().probeDevice(device) != null
+
+            if (isTinkerforge || isSerial) {
+                tinkerforgeOrSerialDevices.add(device)
+            }
+        }
+
+        val firstDevice = tinkerforgeOrSerialDevices.firstOrNull()
+        if (firstDevice != null) {
+            val devName = "${firstDevice.manufacturerName ?: "USB Device"} (${firstDevice.productName ?: "VID:${firstDevice.vendorId}"})"
+            _config.value = _config.value.copy(
+                usbDeviceDetected = true,
+                usbDeviceName = devName
+            )
+            Log.d(TAG, "Detected USB IMU/Serial Device: $devName")
+        } else {
+            _config.value = _config.value.copy(
+                usbDeviceDetected = false,
+                usbDeviceName = null
+            )
+        }
+
+        return tinkerforgeOrSerialDevices
     }
 
     fun updateConfig(newConfig: ImuConfig) {
@@ -90,8 +130,16 @@ class ImuHandler {
                 _config.value = _config.value.copy(isConnected = true, errorMessage = null)
                 Log.d(TAG, "Connected to Tinkerforge at ${currentConfig.host}:${currentConfig.port}")
             } catch (e: Exception) {
-                val errorMsg = "Connection failed (${currentConfig.host}:${currentConfig.port}): ${e.localizedMessage ?: e.message ?: "Unknown error"}"
-                Log.e(TAG, "Error connecting to Tinkerforge IMU Brick v2", e)
+                val host = currentConfig.host
+                val port = currentConfig.port
+                val errorMsg = if (host == "127.0.0.1" || host == "localhost") {
+                    "No local brickd server found on Android localhost:$port (ECONNREFUSED).\n" +
+                    "• If IMU Brick v2 is connected via USB Hub to tablet, enter IP address of remote brickd host or use Simulated Mode.\n" +
+                    "• USB Device status: ${if (_config.value.usbDeviceDetected) "Detected (${_config.value.usbDeviceName})" else "Not detected"}"
+                } else {
+                    "Could not connect to $host:$port - ${e.localizedMessage ?: e.message}"
+                }
+                Log.e(TAG, "Error connecting to Tinkerforge IMU Brick v2: $errorMsg", e)
                 _config.value = _config.value.copy(isConnected = false, errorMessage = errorMsg)
             }
         }
