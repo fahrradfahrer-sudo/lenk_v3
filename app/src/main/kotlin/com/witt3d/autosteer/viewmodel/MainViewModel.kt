@@ -2,12 +2,14 @@ package com.witt3d.autosteer.viewmodel
 
 import android.content.Context
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import com.witt3d.autosteer.data.models.ImuConfig
 import com.witt3d.autosteer.data.models.TelemetryData
 import com.witt3d.autosteer.data.repository.ImuRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 
 class MainViewModel : ViewModel() {
     private val _telemetry = MutableStateFlow(TelemetryData())
@@ -17,18 +19,23 @@ class MainViewModel : ViewModel() {
     val imuConfig: StateFlow<ImuConfig> = imuHandler.config
 
     init {
-        imuHandler.setTelemetryListener { newTelemetry ->
-            _telemetry.value = _telemetry.value.copy(
-                headingDegrees = newTelemetry.headingDegrees,
-                inclinationDegrees = newTelemetry.inclinationDegrees,
-                pitchDegrees = newTelemetry.pitchDegrees,
-                accelX = newTelemetry.accelX,
-                accelY = newTelemetry.accelY,
-                accelZ = newTelemetry.accelZ
-            )
+        viewModelScope.launch {
+            imuHandler.telemetry.collect { newTelemetry ->
+                _telemetry.value = _telemetry.value.copy(
+                    headingDegrees = newTelemetry.headingDegrees,
+                    inclinationDegrees = newTelemetry.inclinationDegrees,
+                    pitchDegrees = newTelemetry.pitchDegrees,
+                    accelX = newTelemetry.accelX,
+                    accelY = newTelemetry.accelY,
+                    accelZ = newTelemetry.accelZ
+                )
+            }
         }
-        // Auto-connect IMU handler on ViewModel creation
-        imuHandler.connect()
+
+        // Auto-connect IMU handler on ViewModel creation if not already connected
+        if (!imuConfig.value.isConnected) {
+            imuHandler.connect()
+        }
     }
 
     fun scanUsbDevices(context: Context) {
@@ -60,10 +67,5 @@ class MainViewModel : ViewModel() {
         accelZ: Double = 9.81
     ) {
         imuHandler.setSimulatedOrientation(heading, roll, pitch, accelX, accelY, accelZ)
-    }
-
-    override fun onCleared() {
-        super.onCleared()
-        // Do not disconnect shared repository on individual ViewModel destruction
     }
 }

@@ -10,13 +10,6 @@ class ImuHandlerTest {
     @Test
     fun testSimulationModeEmitsTelemetryData() {
         val imuHandler = ImuHandler()
-        var receivedHeading = 0.0
-        var receivedRoll = 0.0
-
-        imuHandler.setTelemetryListener { telemetry ->
-            receivedHeading = telemetry.headingDegrees
-            receivedRoll = telemetry.inclinationDegrees
-        }
 
         imuHandler.updateConfig(
             ImuConfig(
@@ -31,8 +24,9 @@ class ImuHandlerTest {
             pitch = 5.0
         )
 
-        assertEquals(120.0, receivedHeading, 0.01)
-        assertEquals(-15.5, receivedRoll, 0.01)
+        val telemetry = imuHandler.telemetry.value
+        assertEquals(120.0, telemetry.headingDegrees, 0.01)
+        assertEquals(-15.5, telemetry.inclinationDegrees, 0.01)
         assertTrue(imuHandler.config.value.isSimulationMode)
     }
 }

@@ -11,6 +11,7 @@ import android.os.Build
 import android.util.Log
 import com.hoho.android.usbserial.driver.CdcAcmSerialDriver
 import com.hoho.android.usbserial.driver.ProbeTable
+import com.hoho.android.usbserial.driver.UsbSerialPort
 import com.hoho.android.usbserial.driver.UsbSerialProber
 import com.tinkerforge.BrickIMUV2
 import com.tinkerforge.IPConnection
@@ -20,6 +21,8 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 
 class ImuHandler {
     private val TAG = "ImuHandler"
@@ -31,12 +34,24 @@ class ImuHandler {
     private val _config = MutableStateFlow(ImuConfig())
     val config: StateFlow<ImuConfig> = _config.asStateFlow()
 
-    private var onTelemetryUpdate: ((TelemetryData) -> Unit)? = null
+    private val _telemetry = MutableStateFlow(TelemetryData())
+    val telemetry: StateFlow<TelemetryData> = _telemetry.asStateFlow()
 
     private var simulationJob: Job? = null
+    private var usbDirectJob: Job? = null
+    private var usbSerialPort: UsbSerialPort? = null
+
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
-    // Simulated telemetry state
+    // Live Telemetry state
+    private var currentHeading = 0.0
+    private var currentRoll = 0.0
+    private var currentPitch = 0.0
+    private var currentAccelX = 0.0
+    private var currentAccelY = 0.0
+    private var currentAccelZ = 9.81
+
+    // Simulated Telemetry state
     private var simHeading = 0.0
     private var simRoll = 0.0
     private var simPitch = 0.0
@@ -56,10 +71,6 @@ class ImuHandler {
             }
         }
         return UsbSerialProber(probeTable)
-    }
-
-    fun setTelemetryListener(listener: (TelemetryData) -> Unit) {
-        onTelemetryUpdate = listener
     }
 
     /**
@@ -89,7 +100,7 @@ class ImuHandler {
                 usbDeviceDetected = true,
                 usbDeviceName = if (hasPerm) devName else "$devName (Permission Required)"
             )
-            Log.d(TAG, "Detected USB IMU/Serial Device: $devName, Has Permission: $hasPerm")
+            Log.d(TAG, "Detected USB IMU Device: $devName, Has Permission: $hasPerm")
 
             if (!hasPerm) {
                 requestUsbPermission(context, usbManager, firstDevice)
@@ -164,6 +175,153 @@ class ImuHandler {
         }
     }
 
+    /**
+     * Tries opening a direct USB Serial connection to the IMU Brick 2.0 when connected via USB C / Hub.
+     */
+    private suspend fun tryConnectUsbDirect(context: Context): Boolean = withContext(Dispatchers.IO) {
+        val usbManager = context.getSystemService(Context.USB_SERVICE) as? UsbManager ?: return@withContext false
+        val prober = getCustomUsbProber()
+        val availableDrivers = prober.findAllDrivers(usbManager)
+
+        val driver = availableDrivers.firstOrNull { d ->
+            d.device.vendorId == 5840 || d.device.vendorId == 0x16D0 || d.ports.isNotEmpty()
+        } ?: return@withContext false
+
+        if (!usbManager.hasPermission(driver.device)) {
+            Log.w(TAG, "USB permission missing for device: ${driver.device.deviceName}")
+            requestUsbPermission(context, usbManager, driver.device)
+            return@withContext false
+        }
+
+        val connection = usbManager.openDevice(driver.device) ?: run {
+            Log.w(TAG, "Could not open USB device connection")
+            return@withContext false
+        }
+
+        val serialPort = driver.ports.firstOrNull() ?: return@withContext false
+        try {
+            serialPort.open(connection)
+            serialPort.setParameters(115200, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
+            usbSerialPort = serialPort
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to open USB serial port", e)
+            return@withContext false
+        }
+
+        Log.d(TAG, "Direct USB Serial connection established to IMU Brick v2")
+
+        // Build and send 'Set Orientation Period' packet (Function ID 22, Period 50ms)
+        val periodPacket = ByteBuffer.allocate(12).order(ByteOrder.LITTLE_ENDIAN).apply {
+            putInt(0) // UID = 0 (broadcast)
+            put(12.toByte()) // Length = 12 bytes
+            put(22.toByte()) // Function ID 22 = SET_ORIENTATION_PERIOD
+            put(0.toByte())  // Sequence / Options
+            put(0.toByte())  // Error
+            putInt(50)       // Period = 50ms (20Hz)
+        }.array()
+
+        // Build and send 'Set Linear Acceleration Period' packet (Function ID 24, Period 50ms)
+        val accelPeriodPacket = ByteBuffer.allocate(12).order(ByteOrder.LITTLE_ENDIAN).apply {
+            putInt(0)
+            put(12.toByte())
+            put(24.toByte()) // Function ID 24 = SET_LINEAR_ACCELERATION_PERIOD
+            put(0.toByte())
+            put(0.toByte())
+            putInt(50)
+        }.array()
+
+        try {
+            serialPort.write(periodPacket, 1000)
+            serialPort.write(accelPeriodPacket, 1000)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error configuring USB IMU periods", e)
+        }
+
+        // Start background USB reader loop
+        usbDirectJob?.cancel()
+        usbDirectJob = scope.launch(Dispatchers.IO) {
+            val readBuffer = ByteArray(1024)
+            val packetBuffer = ByteArray(2048)
+            var packetBufLen = 0
+
+            while (isActive) {
+                try {
+                    val read = serialPort.read(readBuffer, 200)
+                    if (read > 0) {
+                        System.arraycopy(readBuffer, 0, packetBuffer, packetBufLen, read)
+                        packetBufLen += read
+
+                        // Parse full Tinkerforge packets from buffer
+                        while (packetBufLen >= 8) {
+                            val packetLen = packetBuffer[4].toInt() and 0xFF
+                            if (packetLen < 8 || packetLen > 256) {
+                                packetBufLen = 0
+                                break
+                            }
+
+                            if (packetBufLen >= packetLen) {
+                                val functionId = packetBuffer[5].toInt() and 0xFF
+                                parseTinkerforgeUsbPacket(packetBuffer, packetLen, functionId)
+
+                                System.arraycopy(packetBuffer, packetLen, packetBuffer, 0, packetBufLen - packetLen)
+                                packetBufLen -= packetLen
+                            } else {
+                                break
+                            }
+                        }
+                    } else {
+                        val getOrientationPacket = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).apply {
+                            putInt(0)
+                            put(8.toByte())
+                            put(5.toByte()) // Function ID 5 = GET_ORIENTATION
+                            put(0.toByte())
+                            put(0.toByte())
+                        }.array()
+                        serialPort.write(getOrientationPacket, 200)
+                    }
+                } catch (e: Exception) {
+                    if (isActive) Log.e(TAG, "Error reading USB IMU stream", e)
+                    delay(100)
+                }
+            }
+        }
+
+        return@withContext true
+    }
+
+    private fun parseTinkerforgeUsbPacket(data: ByteArray, length: Int, functionId: Int) {
+        if ((functionId == 38 || functionId == 5) && length >= 14) {
+            val bb = ByteBuffer.wrap(data, 8, 6).order(ByteOrder.LITTLE_ENDIAN)
+            val heading = bb.short / 16.0
+            val roll = bb.short / 16.0
+            val pitch = bb.short / 16.0
+
+            currentHeading = heading
+            currentRoll = roll
+            currentPitch = pitch
+
+            emitTelemetry(
+                TelemetryData(
+                    headingDegrees = currentHeading,
+                    inclinationDegrees = currentRoll,
+                    pitchDegrees = currentPitch,
+                    accelX = currentAccelX,
+                    accelY = currentAccelY,
+                    accelZ = currentAccelZ
+                )
+            )
+        } else if ((functionId == 36 || functionId == 6) && length >= 14) {
+            val bb = ByteBuffer.wrap(data, 8, 6).order(ByteOrder.LITTLE_ENDIAN)
+            currentAccelX = bb.short / 100.0
+            currentAccelY = bb.short / 100.0
+            currentAccelZ = bb.short / 100.0
+        }
+    }
+
+    private fun emitTelemetry(data: TelemetryData) {
+        _telemetry.value = data
+    }
+
     fun connect(context: Context? = null) {
         scope.launch(Dispatchers.IO) {
             if (context != null) {
@@ -180,8 +338,18 @@ class ImuHandler {
 
             stopSimulation()
 
+            // Step 1: If host is localhost/127.0.0.1 and context is available, attempt USB Direct connection
+            if ((currentConfig.host == "127.0.0.1" || currentConfig.host == "localhost") && context != null) {
+                val usbDirectSuccess = tryConnectUsbDirect(context)
+                if (usbDirectSuccess) {
+                    _config.value = currentConfig.copy(isConnected = true, errorMessage = null)
+                    Log.d(TAG, "Successfully connected to IMU Brick v2 via Direct USB Serial")
+                    return@launch
+                }
+            }
+
+            // Step 2: Fall back to TCP IPConnection (for remote host PC/brickd)
             try {
-                // Close existing connection if any
                 try {
                     ipcon?.disconnect()
                 } catch (_: Exception) {}
@@ -190,7 +358,6 @@ class ImuHandler {
                 ipcon = connection
                 connection.connect(currentConfig.host, currentConfig.port)
 
-                // Auto-discovery via enumeration listener if UID is not explicitly provided
                 connection.addEnumerateListener { uid, _, _, _, _, deviceIdentifier, _ ->
                     if (deviceIdentifier == BrickIMUV2.DEVICE_IDENTIFIER) {
                         Log.d(TAG, "Discovered IMU Brick v2 with UID: $uid")
@@ -207,19 +374,18 @@ class ImuHandler {
                 }
 
                 _config.value = _config.value.copy(isConnected = true, errorMessage = null)
-                Log.d(TAG, "Connected to Tinkerforge at ${currentConfig.host}:${currentConfig.port}")
+                Log.d(TAG, "Connected to Tinkerforge IPConnection at ${currentConfig.host}:${currentConfig.port}")
             } catch (e: Exception) {
                 val host = currentConfig.host
                 val port = currentConfig.port
                 val errorMsg = if (host == "127.0.0.1" || host == "localhost") {
                     if (_config.value.usbDeviceDetected) {
-                        "IMU Brick 2.0 detected via USB (${_config.value.usbDeviceName}).\n" +
-                        "• Tinkerforge API connects via network TCP to a brickd daemon on port $port.\n" +
-                        "• To connect to physical IMU, enter the IP address of the host/PC running brickd.\n" +
-                        "• Or enable 'Simulated IMU Mode' below to test 3D orientation & movement live."
+                        "USB IMU Brick v2 detected (${_config.value.usbDeviceName}).\n" +
+                        "• Tap 'Scan USB' to grant USB permission if prompt appeared.\n" +
+                        "• To connect to remote hardware, enter remote brickd IP address or toggle Simulated Mode."
                     } else {
-                        "No brickd daemon running on local port $port.\n" +
-                        "• Enter remote brickd host IP address or enable Simulated Mode below."
+                        "No local brickd server found on localhost:$port.\n" +
+                        "• Connect IMU Brick via USB or enter remote IP address / Simulated Mode."
                     }
                 } else {
                     "Could not connect to $host:$port - ${e.localizedMessage ?: e.message}"
@@ -236,32 +402,29 @@ class ImuHandler {
             imu = brick
             _config.value = _config.value.copy(uid = uid, errorMessage = null)
 
-            // Register Orientation Listener (heading, roll, pitch in 1/16 deg units)
             brick.addOrientationListener { heading, roll, pitch ->
-                val headingDeg = heading / 16.0
-                val rollDeg = roll / 16.0
-                val pitchDeg = pitch / 16.0
+                currentHeading = heading / 16.0
+                currentRoll = roll / 16.0
+                currentPitch = pitch / 16.0
 
-                onTelemetryUpdate?.invoke(
+                emitTelemetry(
                     TelemetryData(
-                        headingDegrees = headingDeg,
-                        inclinationDegrees = rollDeg,
-                        pitchDegrees = pitchDeg,
-                        accelX = simAccelX,
-                        accelY = simAccelY,
-                        accelZ = simAccelZ
+                        headingDegrees = currentHeading,
+                        inclinationDegrees = currentRoll,
+                        pitchDegrees = currentPitch,
+                        accelX = currentAccelX,
+                        accelY = currentAccelY,
+                        accelZ = currentAccelZ
                     )
                 )
             }
 
-            // Register Linear Acceleration Listener (m/s^2 * 100)
             brick.addLinearAccelerationListener { x, y, z ->
-                simAccelX = x / 100.0
-                simAccelY = y / 100.0
-                simAccelZ = z / 100.0
+                currentAccelX = x / 100.0
+                currentAccelY = y / 100.0
+                currentAccelZ = z / 100.0
             }
 
-            // Set period for orientation callbacks safely
             try {
                 brick.setOrientationPeriod(50)
                 brick.setLinearAccelerationPeriod(50)
@@ -277,8 +440,19 @@ class ImuHandler {
         }
     }
 
+    private fun stopUsbDirect() {
+        usbDirectJob?.cancel()
+        usbDirectJob = null
+
+        try {
+            usbSerialPort?.close()
+            usbSerialPort = null
+        } catch (_: Exception) {}
+    }
+
     fun disconnect() {
         stopSimulation()
+        stopUsbDirect()
         scope.launch(Dispatchers.IO) {
             try {
                 imu = null
@@ -296,7 +470,7 @@ class ImuHandler {
         stopSimulation()
         simulationJob = scope.launch {
             while (isActive) {
-                onTelemetryUpdate?.invoke(
+                emitTelemetry(
                     TelemetryData(
                         headingDegrees = simHeading,
                         inclinationDegrees = simRoll,
@@ -326,7 +500,7 @@ class ImuHandler {
         simAccelZ = accelZ
 
         if (_config.value.isSimulationMode) {
-            onTelemetryUpdate?.invoke(
+            emitTelemetry(
                 TelemetryData(
                     headingDegrees = simHeading,
                     inclinationDegrees = simRoll,
