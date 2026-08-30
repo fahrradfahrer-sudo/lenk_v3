@@ -90,7 +90,7 @@ fun SettingsScreen(viewModel: MainViewModel = viewModel()) {
                                 Text("Disconnect")
                             }
                         } else {
-                            Button(onClick = { viewModel.connectImu() }) {
+                            Button(onClick = { viewModel.connectImu(context) }) {
                                 Text("Connect")
                             }
                         }

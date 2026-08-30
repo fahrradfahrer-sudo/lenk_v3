@@ -5,10 +5,11 @@ import android.content.Intent
 import android.os.Binder
 import android.os.IBinder
 import android.util.Log
+import com.witt3d.autosteer.data.repository.ImuRepository
 
 class HardwareService : Service() {
     private val TAG = "HardwareService"
-    val imuHandler = ImuHandler()
+    val imuHandler = ImuRepository.imuHandler
 
     inner class HardwareBinder : Binder() {
         fun getService(): HardwareService = this@HardwareService
@@ -20,7 +21,7 @@ class HardwareService : Service() {
         super.onCreate()
         Log.d(TAG, "Hardware Service Created")
         // Auto-connect IMU on startup as per requirements
-        imuHandler.connect()
+        imuHandler.connect(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {

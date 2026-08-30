@@ -4,7 +4,7 @@ import android.content.Context
 import androidx.lifecycle.ViewModel
 import com.witt3d.autosteer.data.models.ImuConfig
 import com.witt3d.autosteer.data.models.TelemetryData
-import com.witt3d.autosteer.hardware.ImuHandler
+import com.witt3d.autosteer.data.repository.ImuRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -13,7 +13,7 @@ class MainViewModel : ViewModel() {
     private val _telemetry = MutableStateFlow(TelemetryData())
     val telemetry: StateFlow<TelemetryData> = _telemetry.asStateFlow()
 
-    val imuHandler = ImuHandler()
+    val imuHandler = ImuRepository.imuHandler
     val imuConfig: StateFlow<ImuConfig> = imuHandler.config
 
     init {
@@ -43,8 +43,8 @@ class MainViewModel : ViewModel() {
         imuHandler.updateConfig(newConfig)
     }
 
-    fun connectImu() {
-        imuHandler.connect()
+    fun connectImu(context: Context? = null) {
+        imuHandler.connect(context)
     }
 
     fun disconnectImu() {
@@ -64,6 +64,6 @@ class MainViewModel : ViewModel() {
 
     override fun onCleared() {
         super.onCleared()
-        imuHandler.disconnect()
+        // Do not disconnect shared repository on individual ViewModel destruction
     }
 }

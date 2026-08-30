@@ -1,9 +1,16 @@
 package com.witt3d.autosteer.hardware
 
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
+import android.os.Build
 import android.util.Log
+import com.hoho.android.usbserial.driver.CdcAcmSerialDriver
+import com.hoho.android.usbserial.driver.ProbeTable
 import com.hoho.android.usbserial.driver.UsbSerialProber
 import com.tinkerforge.BrickIMUV2
 import com.tinkerforge.IPConnection
@@ -16,6 +23,7 @@ import kotlinx.coroutines.flow.asStateFlow
 
 class ImuHandler {
     private val TAG = "ImuHandler"
+    private val ACTION_USB_PERMISSION = "com.witt3d.autosteer.USB_PERMISSION"
 
     private var ipcon: IPConnection? = null
     private var imu: BrickIMUV2? = null
@@ -36,22 +44,37 @@ class ImuHandler {
     private var simAccelY = 0.0
     private var simAccelZ = 9.81
 
+    private fun getCustomUsbProber(): UsbSerialProber {
+        val probeTable = UsbSerialProber.getDefaultProbeTable()
+        val vendorIds = intArrayOf(5840, 0x16D0)
+        val productIds = intArrayOf(
+            0x063D, 0x063F, 0x0640, 0x0659, 0x0650, 0x0651, 0x0652, 0x0653, 0x0654, 0x0655, 0x0656, 0x0657, 0x0658, 0x0660
+        )
+        for (vid in vendorIds) {
+            for (pid in productIds) {
+                probeTable.addProduct(vid, pid, CdcAcmSerialDriver::class.java)
+            }
+        }
+        return UsbSerialProber(probeTable)
+    }
+
     fun setTelemetryListener(listener: (TelemetryData) -> Unit) {
         onTelemetryUpdate = listener
     }
 
     /**
-     * Scans for attached USB devices (such as Tinkerforge Bricks VID 5840 / 0x16D0 or USB Serial controllers).
+     * Scans for attached USB devices and requests USB permission if needed.
      */
     fun scanUsbDevices(context: Context): List<UsbDevice> {
         val usbManager = context.getSystemService(Context.USB_SERVICE) as? UsbManager ?: return emptyList()
         val deviceList = usbManager.deviceList
         val tinkerforgeOrSerialDevices = mutableListOf<UsbDevice>()
 
+        val prober = getCustomUsbProber()
+
         for ((_, device) in deviceList) {
-            // Tinkerforge Vendor ID: 5840 (0x16D0) or USB CDC/Serial drivers
             val isTinkerforge = device.vendorId == 5840 || device.vendorId == 0x16D0
-            val isSerial = UsbSerialProber.getDefaultProber().probeDevice(device) != null
+            val isSerial = prober.probeDevice(device) != null
 
             if (isTinkerforge || isSerial) {
                 tinkerforgeOrSerialDevices.add(device)
@@ -60,12 +83,17 @@ class ImuHandler {
 
         val firstDevice = tinkerforgeOrSerialDevices.firstOrNull()
         if (firstDevice != null) {
-            val devName = "${firstDevice.manufacturerName ?: "USB Device"} (${firstDevice.productName ?: "VID:${firstDevice.vendorId}"})"
+            val hasPerm = usbManager.hasPermission(firstDevice)
+            val devName = "${firstDevice.manufacturerName ?: "Tinkerforge"} (${firstDevice.productName ?: "IMU Brick 2.0"})"
             _config.value = _config.value.copy(
                 usbDeviceDetected = true,
-                usbDeviceName = devName
+                usbDeviceName = if (hasPerm) devName else "$devName (Permission Required)"
             )
-            Log.d(TAG, "Detected USB IMU/Serial Device: $devName")
+            Log.d(TAG, "Detected USB IMU/Serial Device: $devName, Has Permission: $hasPerm")
+
+            if (!hasPerm) {
+                requestUsbPermission(context, usbManager, firstDevice)
+            }
         } else {
             _config.value = _config.value.copy(
                 usbDeviceDetected = false,
@@ -74,6 +102,51 @@ class ImuHandler {
         }
 
         return tinkerforgeOrSerialDevices
+    }
+
+    private fun requestUsbPermission(context: Context, usbManager: UsbManager, device: UsbDevice) {
+        try {
+            val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            } else {
+                PendingIntent.FLAG_UPDATE_CURRENT
+            }
+
+            val intent = Intent(ACTION_USB_PERMISSION)
+            val permissionIntent = PendingIntent.getBroadcast(context, 0, intent, flags)
+
+            val filter = IntentFilter(ACTION_USB_PERMISSION)
+            val receiver = object : BroadcastReceiver() {
+                override fun onReceive(c: Context?, intent: Intent?) {
+                    if (ACTION_USB_PERMISSION == intent?.action) {
+                        synchronized(this) {
+                            c?.unregisterReceiver(this)
+                            val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
+                            Log.d(TAG, "USB Permission callback result: $granted")
+                            if (granted) {
+                                scanUsbDevices(context)
+                                connect(context)
+                            } else {
+                                _config.value = _config.value.copy(
+                                    errorMessage = "USB permission was denied by user."
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                context.registerReceiver(receiver, filter)
+            }
+
+            usbManager.requestPermission(device, permissionIntent)
+            Log.d(TAG, "Requested USB Permission for device: ${device.deviceName}")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error requesting USB permission", e)
+        }
     }
 
     fun updateConfig(newConfig: ImuConfig) {
@@ -89,8 +162,12 @@ class ImuHandler {
         }
     }
 
-    fun connect() {
+    fun connect(context: Context? = null) {
         scope.launch(Dispatchers.IO) {
+            if (context != null) {
+                scanUsbDevices(context)
+            }
+
             val currentConfig = _config.value
             if (currentConfig.isSimulationMode) {
                 startSimulation()
@@ -133,13 +210,19 @@ class ImuHandler {
                 val host = currentConfig.host
                 val port = currentConfig.port
                 val errorMsg = if (host == "127.0.0.1" || host == "localhost") {
-                    "No local brickd server found on Android localhost:$port (ECONNREFUSED).\n" +
-                    "• If IMU Brick v2 is connected via USB Hub to tablet, enter IP address of remote brickd host or use Simulated Mode.\n" +
-                    "• USB Device status: ${if (_config.value.usbDeviceDetected) "Detected (${_config.value.usbDeviceName})" else "Not detected"}"
+                    if (_config.value.usbDeviceDetected) {
+                        "IMU Brick 2.0 detected via USB (${_config.value.usbDeviceName}).\n" +
+                        "• Tinkerforge API connects via network TCP to a brickd daemon on port $port.\n" +
+                        "• To connect to physical IMU, enter the IP address of the host/PC running brickd.\n" +
+                        "• Or enable 'Simulated IMU Mode' below to test 3D orientation & movement live."
+                    } else {
+                        "No brickd daemon running on local port $port.\n" +
+                        "• Enter remote brickd host IP address or enable Simulated Mode below."
+                    }
                 } else {
                     "Could not connect to $host:$port - ${e.localizedMessage ?: e.message}"
                 }
-                Log.e(TAG, "Error connecting to Tinkerforge IMU Brick v2: $errorMsg", e)
+                Log.e(TAG, "Error connecting to Tinkerforge IMU Brick v2", e)
                 _config.value = _config.value.copy(isConnected = false, errorMessage = errorMsg)
             }
         }
@@ -176,9 +259,13 @@ class ImuHandler {
                 simAccelZ = z / 100.0
             }
 
-            // Set period for orientation callbacks (e.g. 50ms = 20Hz)
-            brick.setOrientationPeriod(50)
-            brick.setLinearAccelerationPeriod(50)
+            // Set period for orientation callbacks safely
+            try {
+                brick.setOrientationPeriod(50)
+                brick.setLinearAccelerationPeriod(50)
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not set callback periods: ${e.message}")
+            }
 
             Log.d(TAG, "IMU Brick v2 initialized with UID: $uid")
         } catch (e: Exception) {
