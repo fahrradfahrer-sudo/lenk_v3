@@ -106,13 +106,15 @@ class ImuHandler {
 
     private fun requestUsbPermission(context: Context, usbManager: UsbManager, device: UsbDevice) {
         try {
-            val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
             } else {
                 PendingIntent.FLAG_UPDATE_CURRENT
             }
 
-            val intent = Intent(ACTION_USB_PERMISSION)
+            val intent = Intent(ACTION_USB_PERMISSION).apply {
+                setPackage(context.packageName)
+            }
             val permissionIntent = PendingIntent.getBroadcast(context, 0, intent, flags)
 
             val filter = IntentFilter(ACTION_USB_PERMISSION)
