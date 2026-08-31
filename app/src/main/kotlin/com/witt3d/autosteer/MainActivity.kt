@@ -28,6 +28,8 @@ class MainActivity : ComponentActivity() {
             )
         )
 
+        startHardwareService()
+
         setContent {
             MaterialTheme {
                 Surface(
@@ -37,6 +39,15 @@ class MainActivity : ComponentActivity() {
                     MainNavigation()
                 }
             }
+        }
+    }
+
+    private fun startHardwareService() {
+        try {
+            val intent = android.content.Intent(this, com.witt3d.autosteer.hardware.HardwareService::class.java)
+            startService(intent)
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Failed to start HardwareService", e)
         }
     }
 }
