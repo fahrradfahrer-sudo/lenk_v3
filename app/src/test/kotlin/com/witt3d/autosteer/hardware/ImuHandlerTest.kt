@@ -29,4 +29,28 @@ class ImuHandlerTest {
         assertEquals(-15.5, telemetry.inclinationDegrees, 0.01)
         assertTrue(imuHandler.config.value.isSimulationMode)
     }
+
+    @Test
+    fun testDisconnectResilienceWithoutThrowing() {
+        val imuHandler = ImuHandler()
+        // Disconnecting when not connected should not throw NotConnectedException or crash
+        imuHandler.disconnect()
+        assertTrue(!imuHandler.config.value.isConnected)
+    }
+
+    @Test
+    fun testSimulationConnectAndDisconnectSequence() {
+        val imuHandler = ImuHandler()
+        imuHandler.updateConfig(ImuConfig(isSimulationMode = true))
+        Thread.sleep(200)
+        assertTrue(imuHandler.config.value.isConnected)
+
+        imuHandler.disconnect()
+        Thread.sleep(200)
+        assertTrue(!imuHandler.config.value.isConnected)
+
+        imuHandler.connect()
+        Thread.sleep(200)
+        assertTrue(imuHandler.config.value.isConnected)
+    }
 }
