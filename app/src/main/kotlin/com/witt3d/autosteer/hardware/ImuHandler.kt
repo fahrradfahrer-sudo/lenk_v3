@@ -38,6 +38,8 @@ class ImuHandler {
     private var simulationJob: Job? = null
     private var usbDirectJob: Job? = null
     private var usbConnection: UsbDeviceConnection? = null
+    private var usbInterface: UsbInterface? = null
+    private var appContext: Context? = null
 
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
@@ -75,6 +77,7 @@ class ImuHandler {
      * Scans for attached USB devices and requests USB permission if needed.
      */
     fun scanUsbDevices(context: Context): List<UsbDevice> {
+        this.appContext = context.applicationContext
         val usbManager = context.getSystemService(Context.USB_SERVICE) as? UsbManager ?: return emptyList()
         val deviceList = usbManager.deviceList
         val tinkerforgeDevices = mutableListOf<UsbDevice>()
@@ -173,6 +176,8 @@ class ImuHandler {
      * Tries connecting directly to the Tinkerforge IMU Brick 2.0 using native Android USB Host Bulk Transfers.
      */
     private suspend fun tryConnectUsbDirect(context: Context): Boolean = withContext(Dispatchers.IO) {
+        stopUsbDirect()
+
         val usbManager = context.getSystemService(Context.USB_SERVICE) as? UsbManager ?: return@withContext false
         val device = usbManager.deviceList.values.firstOrNull { it.vendorId == 5840 || it.vendorId == 0x16D0 }
             ?: return@withContext false
@@ -188,18 +193,21 @@ class ImuHandler {
             return@withContext false
         }
 
-        val usbInterface = device.getInterface(0)
-        if (!connection.claimInterface(usbInterface, true)) {
+        val iface = device.getInterface(0)
+        if (!connection.claimInterface(iface, true)) {
             Log.w(TAG, "Could not claim USB Interface 0")
             connection.close()
             return@withContext false
         }
 
+        usbConnection = connection
+        usbInterface = iface
+
         var endpointIn: UsbEndpoint? = null
         var endpointOut: UsbEndpoint? = null
 
-        for (i in 0 until usbInterface.endpointCount) {
-            val ep = usbInterface.getEndpoint(i)
+        for (i in 0 until iface.endpointCount) {
+            val ep = iface.getEndpoint(i)
             if (ep.type == UsbConstants.USB_ENDPOINT_XFER_BULK) {
                 if (ep.direction == UsbConstants.USB_DIR_IN) {
                     endpointIn = ep
@@ -211,12 +219,10 @@ class ImuHandler {
 
         if (endpointIn == null || endpointOut == null) {
             Log.e(TAG, "Bulk endpoints not found on USB device")
-            connection.releaseInterface(usbInterface)
-            connection.close()
+            stopUsbDirect()
             return@withContext false
         }
 
-        usbConnection = connection
         Log.d(TAG, "Direct Native USB Bulk Transfer connection established to IMU Brick v2")
 
         // Build 'Set Orientation Period' packet (Function ID 22, Period = 50ms)
@@ -333,9 +339,14 @@ class ImuHandler {
     }
 
     fun connect(context: Context? = null) {
+        if (context != null) {
+            appContext = context.applicationContext
+        }
+
         scope.launch(Dispatchers.IO) {
-            if (context != null) {
-                scanUsbDevices(context)
+            val ctx = context ?: appContext
+            if (ctx != null) {
+                scanUsbDevices(ctx)
             }
 
             val currentConfig = _config.value
@@ -349,8 +360,8 @@ class ImuHandler {
             stopSimulation()
 
             // Step 1: If host is localhost/127.0.0.1 and context is available, attempt native Direct USB Bulk Transfer connection
-            if ((currentConfig.host == "127.0.0.1" || currentConfig.host == "localhost") && context != null) {
-                val usbDirectSuccess = tryConnectUsbDirect(context)
+            if ((currentConfig.host == "127.0.0.1" || currentConfig.host == "localhost") && ctx != null) {
+                val usbDirectSuccess = tryConnectUsbDirect(ctx)
                 if (usbDirectSuccess) {
                     _config.value = currentConfig.copy(isConnected = true, errorMessage = null)
                     Log.d(TAG, "Successfully connected to IMU Brick v2 via Native USB Bulk Transfer")
@@ -360,9 +371,7 @@ class ImuHandler {
 
             // Step 2: Fall back to TCP IPConnection (for remote host PC/brickd)
             try {
-                try {
-                    ipcon?.disconnect()
-                } catch (_: Exception) {}
+                safelyDisconnectIpcon()
 
                 val connection = IPConnection()
                 ipcon = connection
@@ -454,10 +463,41 @@ class ImuHandler {
         usbDirectJob?.cancel()
         usbDirectJob = null
 
-        try {
-            usbConnection?.close()
-            usbConnection = null
-        } catch (_: Exception) {}
+        val conn = usbConnection
+        val iface = usbInterface
+
+        usbConnection = null
+        usbInterface = null
+
+        if (conn != null) {
+            try {
+                if (iface != null) {
+                    conn.releaseInterface(iface)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Error releasing USB interface: ${e.message}")
+            }
+            try {
+                conn.close()
+            } catch (e: Exception) {
+                Log.w(TAG, "Error closing UsbDeviceConnection: ${e.message}")
+            }
+        }
+    }
+
+    private fun safelyDisconnectIpcon() {
+        val conn = ipcon
+        ipcon = null
+        imu = null
+        if (conn != null) {
+            try {
+                if (conn.getConnectionState() != IPConnection.CONNECTION_STATE_DISCONNECTED) {
+                    conn.disconnect()
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Ignored exception during IPConnection disconnect: ${e.message}")
+            }
+        }
     }
 
     fun disconnect() {
@@ -465,9 +505,7 @@ class ImuHandler {
         stopUsbDirect()
         scope.launch(Dispatchers.IO) {
             try {
-                imu = null
-                ipcon?.disconnect()
-                ipcon = null
+                safelyDisconnectIpcon()
                 _config.value = _config.value.copy(isConnected = false)
                 Log.d(TAG, "Disconnected IMU Handler")
             } catch (e: Exception) {
