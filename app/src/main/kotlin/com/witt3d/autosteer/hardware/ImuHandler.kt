@@ -37,11 +37,53 @@ class ImuHandler {
 
     private var simulationJob: Job? = null
     private var usbDirectJob: Job? = null
+    private var retryJob: Job? = null
     private var usbConnection: UsbDeviceConnection? = null
     private var usbInterface: UsbInterface? = null
     private var appContext: Context? = null
+    private var isUsbReceiverRegistered = false
 
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+
+    private val usbReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            val action = intent?.action
+            if (UsbManager.ACTION_USB_DEVICE_ATTACHED == action) {
+                Log.d(TAG, "USB Device Attached broadcast received")
+                connect(context)
+            } else if (UsbManager.ACTION_USB_DEVICE_DETACHED == action) {
+                Log.d(TAG, "USB Device Detached broadcast received")
+                val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+                }
+                if (device != null && (device.vendorId == 5840 || device.vendorId == 0x16D0)) {
+                    disconnect()
+                }
+            }
+        }
+    }
+
+    private fun registerUsbReceiver(context: Context) {
+        if (isUsbReceiverRegistered) return
+        try {
+            val filter = IntentFilter().apply {
+                addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
+                addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.applicationContext.registerReceiver(usbReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                context.applicationContext.registerReceiver(usbReceiver, filter)
+            }
+            isUsbReceiverRegistered = true
+            Log.d(TAG, "Registered USB Attached/Detached BroadcastReceiver")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to register USB BroadcastReceiver: ${e.message}")
+        }
+    }
 
     // Live Telemetry state
     private var currentHeading = 0.0
@@ -341,76 +383,89 @@ class ImuHandler {
     fun connect(context: Context? = null) {
         if (context != null) {
             appContext = context.applicationContext
+            registerUsbReceiver(context.applicationContext)
         }
 
-        scope.launch(Dispatchers.IO) {
-            val ctx = context ?: appContext
-            if (ctx != null) {
-                scanUsbDevices(ctx)
-            }
+        retryJob?.cancel()
+        retryJob = scope.launch(Dispatchers.IO) {
+            var attempt = 0
+            val maxAttempts = 5
 
-            val currentConfig = _config.value
-            if (currentConfig.isSimulationMode) {
-                startSimulation()
-                _config.value = currentConfig.copy(isConnected = true, errorMessage = null)
-                Log.d(TAG, "Started Simulated IMU Mode")
-                return@launch
-            }
+            while (isActive && !_config.value.isConnected && attempt < maxAttempts) {
+                attempt++
+                val ctx = context ?: appContext
+                if (ctx != null) {
+                    scanUsbDevices(ctx)
+                }
 
-            stopSimulation()
-
-            // Step 1: If host is localhost/127.0.0.1 and context is available, attempt native Direct USB Bulk Transfer connection
-            if ((currentConfig.host == "127.0.0.1" || currentConfig.host == "localhost") && ctx != null) {
-                val usbDirectSuccess = tryConnectUsbDirect(ctx)
-                if (usbDirectSuccess) {
+                val currentConfig = _config.value
+                if (currentConfig.isSimulationMode) {
+                    startSimulation()
                     _config.value = currentConfig.copy(isConnected = true, errorMessage = null)
-                    Log.d(TAG, "Successfully connected to IMU Brick v2 via Native USB Bulk Transfer")
+                    Log.d(TAG, "Started Simulated IMU Mode")
                     return@launch
                 }
-            }
 
-            // Step 2: Fall back to TCP IPConnection (for remote host PC/brickd)
-            try {
-                safelyDisconnectIpcon()
+                stopSimulation()
 
-                val connection = IPConnection()
-                ipcon = connection
-                connection.connect(currentConfig.host, currentConfig.port)
+                // Step 1: If host is localhost/127.0.0.1 and context is available, attempt native Direct USB Bulk Transfer connection
+                if ((currentConfig.host == "127.0.0.1" || currentConfig.host == "localhost") && ctx != null) {
+                    val usbDirectSuccess = tryConnectUsbDirect(ctx)
+                    if (usbDirectSuccess) {
+                        _config.value = currentConfig.copy(isConnected = true, errorMessage = null)
+                        Log.d(TAG, "Successfully connected to IMU Brick v2 via Native USB Bulk Transfer")
+                        return@launch
+                    }
+                }
 
-                connection.addEnumerateListener { uid, _, _, _, _, deviceIdentifier, _ ->
-                    if (deviceIdentifier == BrickIMUV2.DEVICE_IDENTIFIER) {
-                        Log.d(TAG, "Discovered IMU Brick v2 with UID: $uid")
-                        if (_config.value.uid.isEmpty() || _config.value.uid == uid) {
-                            setupImuDevice(connection, uid)
+                // Step 2: Fall back to TCP IPConnection (for remote host PC/brickd)
+                try {
+                    safelyDisconnectIpcon()
+
+                    val connection = IPConnection()
+                    ipcon = connection
+                    connection.connect(currentConfig.host, currentConfig.port)
+
+                    connection.addEnumerateListener { uid, _, _, _, _, deviceIdentifier, _ ->
+                        if (deviceIdentifier == BrickIMUV2.DEVICE_IDENTIFIER) {
+                            Log.d(TAG, "Discovered IMU Brick v2 with UID: $uid")
+                            if (_config.value.uid.isEmpty() || _config.value.uid == uid) {
+                                setupImuDevice(connection, uid)
+                            }
                         }
                     }
-                }
 
-                if (currentConfig.uid.isNotEmpty()) {
-                    setupImuDevice(connection, currentConfig.uid)
-                } else {
-                    connection.enumerate()
-                }
-
-                _config.value = _config.value.copy(isConnected = true, errorMessage = null)
-                Log.d(TAG, "Connected to Tinkerforge IPConnection at ${currentConfig.host}:${currentConfig.port}")
-            } catch (e: Exception) {
-                val host = currentConfig.host
-                val port = currentConfig.port
-                val errorMsg = if (host == "127.0.0.1" || host == "localhost") {
-                    if (_config.value.usbDeviceDetected) {
-                        "USB IMU Brick v2 detected (${_config.value.usbDeviceName}).\n" +
-                        "• Tap 'Scan USB' to grant USB permission if prompt appeared.\n" +
-                        "• To connect to remote hardware, enter remote brickd IP address or toggle Simulated Mode."
+                    if (currentConfig.uid.isNotEmpty()) {
+                        setupImuDevice(connection, currentConfig.uid)
                     } else {
-                        "No local brickd server found on localhost:$port.\n" +
-                        "• Connect IMU Brick via USB or enter remote IP address / Simulated Mode."
+                        connection.enumerate()
                     }
-                } else {
-                    "Could not connect to $host:$port - ${e.localizedMessage ?: e.message}"
+
+                    _config.value = _config.value.copy(isConnected = true, errorMessage = null)
+                    Log.d(TAG, "Connected to Tinkerforge IPConnection at ${currentConfig.host}:${currentConfig.port}")
+                    return@launch
+                } catch (e: Exception) {
+                    val host = currentConfig.host
+                    val port = currentConfig.port
+                    val errorMsg = if (host == "127.0.0.1" || host == "localhost") {
+                        if (_config.value.usbDeviceDetected) {
+                            "USB IMU Brick v2 detected (${_config.value.usbDeviceName}).\n" +
+                            "• Tap 'Scan USB' to grant USB permission if prompt appeared.\n" +
+                            "• To connect to remote hardware, enter remote brickd IP address or toggle Simulated Mode."
+                        } else {
+                            "No local brickd server found on localhost:$port.\n" +
+                            "• Connect IMU Brick via USB or enter remote IP address / Simulated Mode."
+                        }
+                    } else {
+                        "Could not connect to $host:$port - ${e.localizedMessage ?: e.message}"
+                    }
+                    Log.e(TAG, "Error connecting to Tinkerforge IMU Brick v2 (Attempt $attempt/$maxAttempts)", e)
+                    _config.value = _config.value.copy(isConnected = false, errorMessage = errorMsg)
                 }
-                Log.e(TAG, "Error connecting to Tinkerforge IMU Brick v2", e)
-                _config.value = _config.value.copy(isConnected = false, errorMessage = errorMsg)
+
+                if (attempt < maxAttempts) {
+                    delay(2000L)
+                }
             }
         }
     }
@@ -501,6 +556,8 @@ class ImuHandler {
     }
 
     fun disconnect() {
+        retryJob?.cancel()
+        retryJob = null
         stopSimulation()
         stopUsbDirect()
         scope.launch(Dispatchers.IO) {
