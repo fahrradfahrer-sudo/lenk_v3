@@ -2,16 +2,26 @@ package com.witt3d.autosteer.hardware
 
 import android.app.Service
 import android.content.Intent
+import android.os.Binder
 import android.os.IBinder
 import android.util.Log
+import com.witt3d.autosteer.data.repository.ImuRepository
 
 class HardwareService : Service() {
     private val TAG = "HardwareService"
+    val imuHandler = ImuRepository.imuHandler
+
+    inner class HardwareBinder : Binder() {
+        fun getService(): HardwareService = this@HardwareService
+    }
+
+    private val binder = HardwareBinder()
 
     override fun onCreate() {
         super.onCreate()
         Log.d(TAG, "Hardware Service Created")
-        // TODO: Initialize USB and Tinkerforge listeners
+        // Auto-connect IMU on startup as per requirements
+        imuHandler.connect(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -19,12 +29,13 @@ class HardwareService : Service() {
         return START_STICKY
     }
 
-    override fun onBind(intent: Intent?): IBinder? {
-        return null
+    override fun onBind(intent: Intent?): IBinder {
+        return binder
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        imuHandler.disconnect()
         Log.d(TAG, "Hardware Service Destroyed")
     }
 }

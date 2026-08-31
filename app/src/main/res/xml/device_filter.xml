@@ -3,4 +3,7 @@
     <!-- u-blox ZED-F9P -->
     <usb-device vendor-id="4348" product-id="5523" /> <!-- Example IDs, often CH340 or similar -->
     <usb-device vendor-id="5446" product-id="423" />  <!-- u-blox AG -->
+
+    <!-- Tinkerforge Bricks / IMU Brick v2 -->
+    <usb-device vendor-id="5840" /> <!-- 0x16D0 Tinkerforge GmbH -->
 </resources>
