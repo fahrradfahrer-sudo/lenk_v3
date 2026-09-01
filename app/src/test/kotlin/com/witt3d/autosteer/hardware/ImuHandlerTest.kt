@@ -42,15 +42,15 @@ class ImuHandlerTest {
     fun testSimulationConnectAndDisconnectSequence() {
         val imuHandler = ImuHandler()
         imuHandler.updateConfig(ImuConfig(isSimulationMode = true))
-        Thread.sleep(200)
+        Thread.sleep(400)
         assertTrue(imuHandler.config.value.isConnected)
 
         imuHandler.disconnect()
-        Thread.sleep(200)
+        Thread.sleep(400)
         assertTrue(!imuHandler.config.value.isConnected)
 
         imuHandler.connect()
-        Thread.sleep(200)
+        Thread.sleep(400)
         assertTrue(imuHandler.config.value.isConnected)
     }
 }
