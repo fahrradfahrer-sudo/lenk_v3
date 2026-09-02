@@ -114,6 +114,50 @@ class MainViewModel : ViewModel() {
         ntripClient.updateConfig(newConfig)
     }
 
+    fun addNtripProfile(context: Context) {
+        val current = ntripConfig.value
+        val newProfile = com.witt3d.autosteer.data.models.NtripProfile(
+            name = "NTRIP Service ${current.profiles.size + 1}",
+            priority = current.profiles.size
+        )
+        val updatedProfiles = current.profiles + newProfile
+        updateNtripConfig(context, current.copy(profiles = updatedProfiles))
+    }
+
+    fun updateNtripProfile(context: Context, profile: com.witt3d.autosteer.data.models.NtripProfile) {
+        val current = ntripConfig.value
+        val updatedProfiles = current.profiles.map { if (it.id == profile.id) profile else it }
+        updateNtripConfig(context, current.copy(profiles = updatedProfiles))
+    }
+
+    fun deleteNtripProfile(context: Context, profileId: String) {
+        val current = ntripConfig.value
+        val updatedProfiles = current.profiles.filterNot { it.id == profileId }.mapIndexed { index, prof ->
+            prof.copy(priority = index)
+        }
+        updateNtripConfig(context, current.copy(profiles = updatedProfiles))
+    }
+
+    fun moveNtripProfileUp(context: Context, index: Int) {
+        if (index <= 0) return
+        val current = ntripConfig.value
+        val list = current.profiles.toMutableList()
+        val item = list.removeAt(index)
+        list.add(index - 1, item)
+        val reordered = list.mapIndexed { idx, prof -> prof.copy(priority = idx) }
+        updateNtripConfig(context, current.copy(profiles = reordered))
+    }
+
+    fun moveNtripProfileDown(context: Context, index: Int) {
+        val current = ntripConfig.value
+        if (index >= current.profiles.size - 1) return
+        val list = current.profiles.toMutableList()
+        val item = list.removeAt(index)
+        list.add(index + 1, item)
+        val reordered = list.mapIndexed { idx, prof -> prof.copy(priority = idx) }
+        updateNtripConfig(context, current.copy(profiles = reordered))
+    }
+
     fun connectNtrip() {
         ntripClient.connect()
     }

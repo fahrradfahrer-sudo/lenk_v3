@@ -32,7 +32,15 @@ fun MapScreen(viewModel: MainViewModel = viewModel()) {
             TelemetryCard("Speed", "${String.format("%.1f", telemetry.speedKmh)} km/h", Modifier.weight(1f))
             TelemetryCard("Heading", "${String.format("%.0f", telemetry.headingDegrees)}°", Modifier.weight(1f))
             TelemetryCard("Inclination", "${String.format("%.1f", telemetry.inclinationDegrees)}°", Modifier.weight(1f))
-            TelemetryCard("Accuracy", "${String.format("%.2f", telemetry.accuracyMeters)}m", Modifier.weight(1f), statusColor(telemetry.fixStatus))
+
+            val statusText = telemetry.fixStatus.displayText
+            val accText = "${String.format("%.2f", telemetry.accuracyMeters)}m"
+            TelemetryCard(
+                label = "Status / Accuracy",
+                value = "$statusText ($accText)",
+                modifier = Modifier.weight(1f),
+                valueColor = statusColor(telemetry.fixStatus)
+            )
         }
     }
 }
@@ -40,11 +48,9 @@ fun MapScreen(viewModel: MainViewModel = viewModel()) {
 @Composable
 fun statusColor(status: GpsFixStatus): Color {
     return when (status) {
-        GpsFixStatus.RTK_FIX -> Color.Green
-        GpsFixStatus.FLOAT -> Color.Yellow
-        GpsFixStatus.FIX -> Color.Cyan
-        GpsFixStatus.DGPS -> Color.Blue
-        GpsFixStatus.NO_FIX -> Color.Red
+        GpsFixStatus.RTK_FIX -> Color(0xFF00C853) // Green
+        GpsFixStatus.FLOAT -> Color(0xFFFF9800)   // Orange
+        else -> Color(0xFFE53935)                 // Red for DGPS, Single, No Fix, etc.
     }
 }
 
