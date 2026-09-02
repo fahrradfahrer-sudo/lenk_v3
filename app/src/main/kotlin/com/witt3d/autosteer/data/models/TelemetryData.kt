@@ -1,7 +1,11 @@
 package com.witt3d.autosteer.data.models
 
-enum class GpsFixStatus {
-    NO_FIX, FIX, FLOAT, RTK_FIX, DGPS
+enum class GpsFixStatus(val displayText: String) {
+    NO_FIX("No Fix"),
+    FIX("Single"),
+    DGPS("DGPS"),
+    FLOAT("FRTK"),
+    RTK_FIX("RTK")
 }
 
 data class TelemetryData(

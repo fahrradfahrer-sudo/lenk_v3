@@ -31,12 +31,6 @@ fun SettingsScreen(viewModel: MainViewModel = viewModel()) {
     // State for GPS Baud Rate
     var baudRateText by remember(gpsConfig.baudRate) { mutableStateOf(gpsConfig.baudRate.toString()) }
 
-    // State for NTRIP Configuration text fields
-    var ntripHostText by remember(ntripConfig.host) { mutableStateOf(ntripConfig.host) }
-    var ntripPortText by remember(ntripConfig.port) { mutableStateOf(ntripConfig.port.toString()) }
-    var ntripMountpointText by remember(ntripConfig.mountpoint) { mutableStateOf(ntripConfig.mountpoint) }
-    var ntripUsernameText by remember(ntripConfig.username) { mutableStateOf(ntripConfig.username) }
-    var ntripPasswordText by remember(ntripConfig.password) { mutableStateOf(ntripConfig.password) }
 
     // Interactive simulation slider values
     var simRoll by remember { mutableStateOf(0f) }
@@ -333,11 +327,24 @@ fun SettingsScreen(viewModel: MainViewModel = viewModel()) {
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = if (ntripConfig.isConnected) "Status: Connected & Streaming RTCM" else "Status: Disconnected",
-                        color = if (ntripConfig.isConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
-                    )
+                    val activeProfileName = ntripConfig.profiles.find { it.id == ntripConfig.activeProfileId }?.name
+                    Column {
+                        Text(
+                            text = if (ntripConfig.isConnected) "Status: Connected (${activeProfileName ?: "Active"})" else "Status: Disconnected",
+                            color = if (ntripConfig.isConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                        )
+                        ntripConfig.errorMessage?.let { err ->
+                            Text(
+                                text = err,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.outline
+                            )
+                        }
+                    }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = { viewModel.addNtripProfile(context) }) {
+                            Text("Add Service")
+                        }
                         if (ntripConfig.isConnected) {
                             Button(onClick = { viewModel.disconnectNtrip() }) {
                                 Text("Disconnect")
@@ -350,90 +357,57 @@ fun SettingsScreen(viewModel: MainViewModel = viewModel()) {
                     }
                 }
 
-                ntripConfig.errorMessage?.let { error ->
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Surface(
-                        color = MaterialTheme.colorScheme.errorContainer,
-                        shape = MaterialTheme.shapes.small,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(
-                            text = error,
-                            color = MaterialTheme.colorScheme.onErrorContainer,
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.padding(8.dp)
-                        )
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Datastream Statistics Display
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text("Datastream Metrics", style = MaterialTheme.typography.titleMedium)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            val stats = ntripConfig.stats
+                            Column {
+                                Text("Incoming Rate (RTCM): ${stats.formatRate(stats.bytesReceivedPerSec)}")
+                                Text("Total Received: ${stats.formatTotalBytes(stats.totalBytesReceived)}")
+                            }
+                            Column {
+                                Text("Outgoing Rate (GGA): ${stats.formatRate(stats.bytesSentPerSec)}")
+                                Text("Total Sent: ${stats.formatTotalBytes(stats.totalBytesSent)}")
+                            }
+                        }
                     }
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    OutlinedTextField(
-                        value = ntripHostText,
-                        onValueChange = {
-                            ntripHostText = it
-                            viewModel.updateNtripConfig(context, ntripConfig.copy(host = it))
-                        },
-                        label = { Text("Caster Host / IP") },
-                        modifier = Modifier.weight(2f)
+                Text("Prioritized Services List (First active enabled service connects first):", style = MaterialTheme.typography.titleMedium)
+                Spacer(modifier = Modifier.height(8.dp))
+
+                if (ntripConfig.profiles.isEmpty()) {
+                    Text("No NTRIP profiles added yet. Click 'Add Service' to create one.", style = MaterialTheme.typography.bodyMedium)
+                }
+
+                ntripConfig.profiles.forEachIndexed { index, profile ->
+                    NtripProfileCard(
+                        profile = profile,
+                        index = index,
+                        totalCount = ntripConfig.profiles.size,
+                        isActive = profile.id == ntripConfig.activeProfileId && ntripConfig.isConnected,
+                        onUpdate = { updatedProf -> viewModel.updateNtripProfile(context, updatedProf) },
+                        onDelete = { viewModel.deleteNtripProfile(context, profile.id) },
+                        onMoveUp = { viewModel.moveNtripProfileUp(context, index) },
+                        onMoveDown = { viewModel.moveNtripProfileDown(context, index) }
                     )
-                    OutlinedTextField(
-                        value = ntripPortText,
-                        onValueChange = {
-                            ntripPortText = it
-                            it.toIntOrNull()?.let { p ->
-                                viewModel.updateNtripConfig(context, ntripConfig.copy(port = p))
-                            }
-                        },
-                        label = { Text("Port") },
-                        modifier = Modifier.weight(1f)
-                    )
+                    Spacer(modifier = Modifier.height(8.dp))
                 }
 
                 Spacer(modifier = Modifier.height(8.dp))
-
-                OutlinedTextField(
-                    value = ntripMountpointText,
-                    onValueChange = {
-                        ntripMountpointText = it
-                        viewModel.updateNtripConfig(context, ntripConfig.copy(mountpoint = it))
-                    },
-                    label = { Text("Mountpoint") },
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    OutlinedTextField(
-                        value = ntripUsernameText,
-                        onValueChange = {
-                            ntripUsernameText = it
-                            viewModel.updateNtripConfig(context, ntripConfig.copy(username = it))
-                        },
-                        label = { Text("Username") },
-                        modifier = Modifier.weight(1f)
-                    )
-                    OutlinedTextField(
-                        value = ntripPasswordText,
-                        onValueChange = {
-                            ntripPasswordText = it
-                            viewModel.updateNtripConfig(context, ntripConfig.copy(password = it))
-                        },
-                        label = { Text("Password") },
-                        visualTransformation = PasswordVisualTransformation(),
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(12.dp))
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -461,6 +435,134 @@ fun SettingsScreen(viewModel: MainViewModel = viewModel()) {
                 )
                 Text("Target Power: ${motorSliderValue.toInt()}")
                 Text("Encoder: 0")
+            }
+        }
+    }
+}
+
+@Composable
+fun NtripProfileCard(
+    profile: com.witt3d.autosteer.data.models.NtripProfile,
+    index: Int,
+    totalCount: Int,
+    isActive: Boolean,
+    onUpdate: (com.witt3d.autosteer.data.models.NtripProfile) -> Unit,
+    onDelete: () -> Unit,
+    onMoveUp: () -> Unit,
+    onMoveDown: () -> Unit
+) {
+    var nameText by remember(profile.name) { mutableStateOf(profile.name) }
+    var hostText by remember(profile.host) { mutableStateOf(profile.host) }
+    var portText by remember(profile.port) { mutableStateOf(profile.port.toString()) }
+    var mountText by remember(profile.mountpoint) { mutableStateOf(profile.mountpoint) }
+    var userText by remember(profile.username) { mutableStateOf(profile.username) }
+    var passText by remember(profile.password) { mutableStateOf(profile.password) }
+
+    OutlinedCard(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.outlinedCardColors(
+            containerColor = if (isActive) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f) else MaterialTheme.colorScheme.surface
+        )
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("#${index + 1}", style = MaterialTheme.typography.titleMedium)
+                    OutlinedTextField(
+                        value = nameText,
+                        onValueChange = {
+                            nameText = it
+                            onUpdate(profile.copy(name = it))
+                        },
+                        label = { Text("Service Name") },
+                        modifier = Modifier.width(180.dp)
+                    )
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Enabled")
+                    Switch(
+                        checked = profile.enabled,
+                        onCheckedChange = { onUpdate(profile.copy(enabled = it)) }
+                    )
+                    IconButton(onClick = onMoveUp, enabled = index > 0) {
+                        Text("▲")
+                    }
+                    IconButton(onClick = onMoveDown, enabled = index < totalCount - 1) {
+                        Text("▼")
+                    }
+                    IconButton(onClick = onDelete) {
+                        Text("✕", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedTextField(
+                    value = hostText,
+                    onValueChange = {
+                        hostText = it
+                        onUpdate(profile.copy(host = it))
+                    },
+                    label = { Text("Host / IP") },
+                    modifier = Modifier.weight(2f)
+                )
+                OutlinedTextField(
+                    value = portText,
+                    onValueChange = {
+                        portText = it
+                        it.toIntOrNull()?.let { p -> onUpdate(profile.copy(port = p)) }
+                    },
+                    label = { Text("Port") },
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            OutlinedTextField(
+                value = mountText,
+                onValueChange = {
+                    mountText = it
+                    onUpdate(profile.copy(mountpoint = it))
+                },
+                label = { Text("Mountpoint") },
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedTextField(
+                    value = userText,
+                    onValueChange = {
+                        userText = it
+                        onUpdate(profile.copy(username = it))
+                    },
+                    label = { Text("Username") },
+                    modifier = Modifier.weight(1f)
+                )
+                OutlinedTextField(
+                    value = passText,
+                    onValueChange = {
+                        passText = it
+                        onUpdate(profile.copy(password = it))
+                    },
+                    label = { Text("Password") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.weight(1f)
+                )
             }
         }
     }
