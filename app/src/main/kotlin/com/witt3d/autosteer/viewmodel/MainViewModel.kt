@@ -5,10 +5,13 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.witt3d.autosteer.data.models.GpsConfig
 import com.witt3d.autosteer.data.models.ImuConfig
+import com.witt3d.autosteer.data.models.MotorConfig
+import com.witt3d.autosteer.data.models.MotorTelemetry
 import com.witt3d.autosteer.data.models.NtripConfig
 import com.witt3d.autosteer.data.models.TelemetryData
 import com.witt3d.autosteer.data.repository.GpsRepository
 import com.witt3d.autosteer.data.repository.HardwareRepository
+import com.witt3d.autosteer.data.repository.MotorRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -26,6 +29,10 @@ class MainViewModel : ViewModel() {
 
     val ntripClient = HardwareRepository.ntripClient
     val ntripConfig: StateFlow<NtripConfig> = ntripClient.config
+
+    val motorHandler = HardwareRepository.motorHandler
+    val motorConfig: StateFlow<MotorConfig> = motorHandler.config
+    val motorTelemetry: StateFlow<MotorTelemetry> = motorHandler.telemetry
 
     init {
         // Collect IMU telemetry updates
@@ -66,6 +73,7 @@ class MainViewModel : ViewModel() {
     fun scanUsbDevices(context: Context) {
         imuHandler.scanUsbDevices(context)
         gpsHandler.scanUsbDevices(context)
+        motorHandler.scanUsbDevices(context)
     }
 
     fun updateTelemetry(newData: TelemetryData) {
@@ -164,5 +172,27 @@ class MainViewModel : ViewModel() {
 
     fun disconnectNtrip() {
         ntripClient.disconnect()
+    }
+
+    // Motor Methods
+    fun updateMotorConfig(context: Context, newConfig: MotorConfig) {
+        MotorRepository.saveMotorConfig(context, newConfig)
+        motorHandler.updateConfig(newConfig)
+    }
+
+    fun connectMotor(context: Context? = null) {
+        motorHandler.connect(context)
+    }
+
+    fun disconnectMotor() {
+        motorHandler.disconnect()
+    }
+
+    fun setMotorTargetPowerPercent(powerPercent: Float) {
+        motorHandler.setTargetPowerPercent(powerPercent)
+    }
+
+    fun emergencyStopMotor() {
+        motorHandler.emergencyStop()
     }
 }

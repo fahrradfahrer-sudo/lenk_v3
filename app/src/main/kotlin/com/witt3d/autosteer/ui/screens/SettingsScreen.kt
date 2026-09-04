@@ -10,6 +10,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.witt3d.autosteer.data.models.MotorType
 import com.witt3d.autosteer.ui.components.ImuVisualizer3D
 import com.witt3d.autosteer.viewmodel.MainViewModel
 
@@ -20,8 +21,10 @@ fun SettingsScreen(viewModel: MainViewModel = viewModel()) {
     val imuConfig by viewModel.imuConfig.collectAsState()
     val gpsConfig by viewModel.gpsConfig.collectAsState()
     val ntripConfig by viewModel.ntripConfig.collectAsState()
+    val motorConfig by viewModel.motorConfig.collectAsState()
+    val motorTelemetry by viewModel.motorTelemetry.collectAsState()
 
-    var motorSliderValue by remember { mutableStateOf(0f) }
+    var motorSliderValue by remember(motorTelemetry.targetPowerPercent) { mutableStateOf(motorTelemetry.targetPowerPercent) }
 
     // State for IMU Configuration text fields
     var hostText by remember(imuConfig.host) { mutableStateOf(imuConfig.host) }
@@ -31,6 +34,13 @@ fun SettingsScreen(viewModel: MainViewModel = viewModel()) {
     // State for GPS Baud Rate
     var baudRateText by remember(gpsConfig.baudRate) { mutableStateOf(gpsConfig.baudRate.toString()) }
 
+    // State for Motor text fields
+    var roboteqChannelText by remember(motorConfig.roboteqChannel) { mutableStateOf(motorConfig.roboteqChannel.toString()) }
+    var roboteqBaudText by remember(motorConfig.roboteqBaudRate) { mutableStateOf(motorConfig.roboteqBaudRate.toString()) }
+    var phidgetChannelText by remember(motorConfig.phidgetChannel) { mutableStateOf(motorConfig.phidgetChannel.toString()) }
+    var phidgetSerialText by remember(motorConfig.phidgetSerialNumber) { mutableStateOf(motorConfig.phidgetSerialNumber.toString()) }
+    var phidgetAccelText by remember(motorConfig.phidgetAcceleration) { mutableStateOf(motorConfig.phidgetAcceleration.toString()) }
+    var phidgetCurrentLimitText by remember(motorConfig.phidgetCurrentLimit) { mutableStateOf(motorConfig.phidgetCurrentLimit.toString()) }
 
     // Interactive simulation slider values
     var simRoll by remember { mutableStateOf(0f) }
@@ -425,16 +435,301 @@ fun SettingsScreen(viewModel: MainViewModel = viewModel()) {
             }
         }
 
+        // Motor Controller Section
         item {
-            HardwareSection("Motor Controller (Roboteq)") {
-                Text("Status: Disconnected")
+            HardwareSection("Motor Controller (Roboteq & Phidgets)") {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            text = if (motorConfig.isConnected) "Status: Connected ${if (motorConfig.isSimulationMode || motorConfig.motorType == MotorType.NONE_SIMULATED) "(Simulated)" else ""}" else "Status: Disconnected",
+                            color = if (motorConfig.isConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                        )
+                        Text(
+                            text = if (motorConfig.usbDeviceDetected) "USB: ${motorConfig.usbDeviceName ?: "Detected"}" else "USB: No USB device detected",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (motorConfig.usbDeviceDetected) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.outline
+                        )
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = { viewModel.scanUsbDevices(context) }) {
+                            Text("Scan USB")
+                        }
+                        if (motorConfig.isConnected) {
+                            Button(onClick = { viewModel.disconnectMotor() }) {
+                                Text("Disconnect")
+                            }
+                        } else {
+                            Button(onClick = { viewModel.connectMotor(context) }) {
+                                Text("Connect")
+                            }
+                        }
+                    }
+                }
+
+                motorConfig.errorMessage?.let { error ->
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Surface(
+                        color = MaterialTheme.colorScheme.errorContainer,
+                        shape = MaterialTheme.shapes.small,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = error,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(8.dp)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Text("Controller Model Selection:", style = MaterialTheme.typography.titleMedium)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilterChip(
+                        selected = motorConfig.motorType == MotorType.NONE_SIMULATED,
+                        onClick = { viewModel.updateMotorConfig(context, motorConfig.copy(motorType = MotorType.NONE_SIMULATED)) },
+                        label = { Text("None / Simulated") }
+                    )
+                    FilterChip(
+                        selected = motorConfig.motorType == MotorType.ROBOTEQ,
+                        onClick = { viewModel.updateMotorConfig(context, motorConfig.copy(motorType = MotorType.ROBOTEQ)) },
+                        label = { Text("Roboteq USB") }
+                    )
+                    FilterChip(
+                        selected = motorConfig.motorType == MotorType.PHIDGETS,
+                        onClick = { viewModel.updateMotorConfig(context, motorConfig.copy(motorType = MotorType.PHIDGETS)) },
+                        label = { Text("Phidgets 1065_1B") }
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Roboteq Specific Settings
+                if (motorConfig.motorType == MotorType.ROBOTEQ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = roboteqChannelText,
+                            onValueChange = {
+                                roboteqChannelText = it
+                                it.toIntOrNull()?.let { ch ->
+                                    viewModel.updateMotorConfig(context, motorConfig.copy(roboteqChannel = ch))
+                                }
+                            },
+                            label = { Text("Roboteq Channel") },
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = roboteqBaudText,
+                            onValueChange = {
+                                roboteqBaudText = it
+                                it.toIntOrNull()?.let { baud ->
+                                    viewModel.updateMotorConfig(context, motorConfig.copy(roboteqBaudRate = baud))
+                                }
+                            },
+                            label = { Text("Baud Rate") },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+
+                // Phidgets Specific Settings
+                if (motorConfig.motorType == MotorType.PHIDGETS) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = phidgetChannelText,
+                            onValueChange = {
+                                phidgetChannelText = it
+                                it.toIntOrNull()?.let { ch ->
+                                    viewModel.updateMotorConfig(context, motorConfig.copy(phidgetChannel = ch))
+                                }
+                            },
+                            label = { Text("Channel") },
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = phidgetSerialText,
+                            onValueChange = {
+                                phidgetSerialText = it
+                                it.toIntOrNull()?.let { serial ->
+                                    viewModel.updateMotorConfig(context, motorConfig.copy(phidgetSerialNumber = serial))
+                                }
+                            },
+                            label = { Text("Serial (-1 = Any)") },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = phidgetAccelText,
+                            onValueChange = {
+                                phidgetAccelText = it
+                                it.toDoubleOrNull()?.let { accel ->
+                                    viewModel.updateMotorConfig(context, motorConfig.copy(phidgetAcceleration = accel))
+                                }
+                            },
+                            label = { Text("Acceleration") },
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = phidgetCurrentLimitText,
+                            onValueChange = {
+                                phidgetCurrentLimitText = it
+                                it.toDoubleOrNull()?.let { limit ->
+                                    viewModel.updateMotorConfig(context, motorConfig.copy(phidgetCurrentLimit = limit))
+                                }
+                            },
+                            label = { Text("Current Limit (A)") },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+
+                // Motor Safety & Limits
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Invert Motor Direction")
+                    Switch(
+                        checked = motorConfig.invertDirection,
+                        onCheckedChange = { invert ->
+                            viewModel.updateMotorConfig(context, motorConfig.copy(invertDirection = invert))
+                        }
+                    )
+                }
+
+                Text("Max Power Limit: ${motorConfig.maxPowerLimitPercent}%")
                 Slider(
-                    value = motorSliderValue,
-                    onValueChange = { motorSliderValue = it },
-                    valueRange = -1000f..1000f
+                    value = motorConfig.maxPowerLimitPercent.toFloat(),
+                    onValueChange = {
+                        viewModel.updateMotorConfig(context, motorConfig.copy(maxPowerLimitPercent = it.toInt()))
+                    },
+                    valueRange = 0f..100f
                 )
-                Text("Target Power: ${motorSliderValue.toInt()}")
-                Text("Encoder: 0")
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Enable Simulated Motor Mode")
+                    Switch(
+                        checked = motorConfig.isSimulationMode,
+                        onCheckedChange = { isSim ->
+                            viewModel.updateMotorConfig(context, motorConfig.copy(isSimulationMode = isSim))
+                        }
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Motor Test & Live Telemetry Controls Card
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text("Motor Test & Live Telemetry", style = MaterialTheme.typography.titleMedium)
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // Target Power Control
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Target Power: ${String.format("%.1f", motorSliderValue)}%",
+                                style = MaterialTheme.typography.titleSmall
+                            )
+                            Button(
+                                onClick = {
+                                    motorSliderValue = 0f
+                                    viewModel.emergencyStopMotor()
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                            ) {
+                                Text("EMERGENCY STOP")
+                            }
+                        }
+
+                        Slider(
+                            value = motorSliderValue,
+                            onValueChange = {
+                                motorSliderValue = it
+                                viewModel.setMotorTargetPowerPercent(it)
+                            },
+                            onValueChangeFinished = {
+                                if (motorConfig.resetOnRelease) {
+                                    motorSliderValue = 0f
+                                    viewModel.setMotorTargetPowerPercent(0f)
+                                }
+                            },
+                            valueRange = -100f..100f
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("Reset slider to 0% on release")
+                            Switch(
+                                checked = motorConfig.resetOnRelease,
+                                onCheckedChange = { reset ->
+                                    viewModel.updateMotorConfig(context, motorConfig.copy(resetOnRelease = reset))
+                                }
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Divider()
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // Live Telemetry Readouts
+                        Text("Live Metrics:", style = MaterialTheme.typography.labelLarge)
+                        Spacer(modifier = Modifier.height(4.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column {
+                                Text("Actual Power: ${String.format("%.1f", motorTelemetry.actualPowerPercent)}%")
+                                Text("Encoder Count: ${motorTelemetry.encoderCount}")
+                                Text("Speed: ${motorTelemetry.speedRpm} RPM")
+                            }
+                            Column {
+                                Text("Current: ${String.format("%.2f", motorTelemetry.currentAmps)} A")
+                                Text("Voltage: ${String.format("%.1f", motorTelemetry.voltageVolts)} V")
+                                Text("Status: ${motorTelemetry.statusMessage}")
+                            }
+                        }
+                    }
+                }
             }
         }
     }
