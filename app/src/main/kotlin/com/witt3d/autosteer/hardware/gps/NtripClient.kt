@@ -11,8 +11,11 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.io.InputStream
 import java.io.OutputStream
+import java.net.Inet4Address
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.net.UnknownHostException
 import java.util.concurrent.atomic.AtomicLong
 
 class NtripClient(
@@ -113,8 +116,39 @@ class NtripClient(
     private suspend fun connectToProfile(profile: NtripProfile): Boolean {
         var socket: Socket? = null
         try {
-            socket = Socket()
-            socket.connect(InetSocketAddress(profile.host, profile.port), 10000)
+            val addresses = try {
+                InetAddress.getAllByName(profile.host)
+            } catch (e: Exception) {
+                emptyArray<InetAddress>()
+            }
+
+            if (addresses.isEmpty()) {
+                throw UnknownHostException("Unable to resolve host: ${profile.host}")
+            }
+
+            // Prioritize IPv4 addresses for maximum compatibility with NTRIP casters
+            val sortedAddresses = addresses.sortedBy { if (it is Inet4Address) 0 else 1 }
+
+            var connectedSocket: Socket? = null
+            var lastException: Exception? = null
+
+            for (address in sortedAddresses) {
+                try {
+                    val s = Socket()
+                    s.connect(InetSocketAddress(address, profile.port), 10000)
+                    connectedSocket = s
+                    break
+                } catch (e: Exception) {
+                    lastException = e
+                    Log.w(TAG, "Failed connection attempt to ${address.hostAddress}:${profile.port} for profile ${profile.name}: ${e.message}")
+                }
+            }
+
+            if (connectedSocket == null) {
+                throw lastException ?: Exception("Failed to connect to ${profile.host}:${profile.port}")
+            }
+
+            socket = connectedSocket
             activeSocket = socket
 
             val outputStream = socket.getOutputStream()

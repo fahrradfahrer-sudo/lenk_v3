@@ -32,7 +32,7 @@ class MainViewModel : ViewModel() {
         viewModelScope.launch {
             imuHandler.telemetry.collect { imuTele ->
                 _telemetry.value = _telemetry.value.copy(
-                    headingDegrees = if (_telemetry.value.headingDegrees == 0.0) imuTele.headingDegrees else _telemetry.value.headingDegrees,
+                    headingDegrees = imuTele.headingDegrees,
                     inclinationDegrees = imuTele.inclinationDegrees,
                     pitchDegrees = imuTele.pitchDegrees,
                     accelX = imuTele.accelX,
