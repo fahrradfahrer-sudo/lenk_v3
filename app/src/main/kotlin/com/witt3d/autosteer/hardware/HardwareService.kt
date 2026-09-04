@@ -7,12 +7,14 @@ import android.os.IBinder
 import android.util.Log
 import com.witt3d.autosteer.data.repository.GpsRepository
 import com.witt3d.autosteer.data.repository.HardwareRepository
+import com.witt3d.autosteer.data.repository.MotorRepository
 
 class HardwareService : Service() {
     private val TAG = "HardwareService"
     val imuHandler = HardwareRepository.imuHandler
     val gpsHandler = HardwareRepository.gpsHandler
     val ntripClient = HardwareRepository.ntripClient
+    val motorHandler = HardwareRepository.motorHandler
 
     inner class HardwareBinder : Binder() {
         fun getService(): HardwareService = this@HardwareService
@@ -24,18 +26,24 @@ class HardwareService : Service() {
         super.onCreate()
         Log.d(TAG, "Hardware Service Created")
 
-        // Load persisted GPS & NTRIP configurations
+        // Load persisted GPS, NTRIP, and Motor configurations
         val savedGpsConfig = GpsRepository.loadGpsConfig(this)
         gpsHandler.updateConfig(savedGpsConfig)
 
         val savedNtripConfig = GpsRepository.loadNtripConfig(this)
         ntripClient.updateConfig(savedNtripConfig)
 
+        val savedMotorConfig = MotorRepository.loadMotorConfig(this)
+        motorHandler.updateConfig(savedMotorConfig)
+
         // Auto-connect hardware on startup
         imuHandler.connect(this)
 
         gpsHandler.scanUsbDevices(this)
         gpsHandler.connect(this)
+
+        motorHandler.scanUsbDevices(this)
+        motorHandler.connect(this)
 
         ntripClient.startGgaReporting(gpsHandler.lastRawGga)
         if (savedNtripConfig.autoConnect) {
@@ -57,6 +65,7 @@ class HardwareService : Service() {
         imuHandler.disconnect()
         gpsHandler.disconnect()
         ntripClient.disconnect()
+        motorHandler.disconnect()
         Log.d(TAG, "Hardware Service Destroyed")
     }
 }

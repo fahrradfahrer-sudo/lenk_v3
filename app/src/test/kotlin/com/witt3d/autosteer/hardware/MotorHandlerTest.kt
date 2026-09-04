@@ -1,0 +1,93 @@
+package com.witt3d.autosteer.hardware
+
+import com.witt3d.autosteer.data.models.MotorConfig
+import com.witt3d.autosteer.data.models.MotorType
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class MotorHandlerTest {
+
+    @Test
+    fun testDefaultMotorConfigAndUpdates() {
+        val handler = MotorHandler()
+        val defaultConfig = handler.config.value
+
+        assertEquals(MotorType.NONE_SIMULATED, defaultConfig.motorType)
+        assertEquals(1, defaultConfig.roboteqChannel)
+        assertEquals(0, defaultConfig.phidgetChannel)
+        assertFalse(defaultConfig.isConnected)
+
+        val updated = defaultConfig.copy(
+            motorType = MotorType.ROBOTEQ,
+            roboteqChannel = 2,
+            invertDirection = true,
+            maxPowerLimitPercent = 80
+        )
+        handler.updateConfig(updated)
+
+        assertEquals(MotorType.ROBOTEQ, handler.config.value.motorType)
+        assertEquals(2, handler.config.value.roboteqChannel)
+        assertTrue(handler.config.value.invertDirection)
+        assertEquals(80, handler.config.value.maxPowerLimitPercent)
+    }
+
+    @Test
+    fun testSimulationModeTelemetryUpdates() {
+        val handler = MotorHandler()
+        handler.updateConfig(
+            MotorConfig(
+                motorType = MotorType.NONE_SIMULATED,
+                isSimulationMode = true
+            )
+        )
+        handler.connect()
+
+        Thread.sleep(200)
+        assertTrue(handler.config.value.isConnected)
+
+        handler.setTargetPowerPercent(50f)
+        Thread.sleep(300)
+
+        val tele = handler.telemetry.value
+        assertEquals(50f, tele.targetPowerPercent, 0.01f)
+        assertEquals(50f, tele.actualPowerPercent, 0.01f)
+        assertTrue(tele.encoderCount > 0)
+        assertTrue(tele.currentAmps > 0.0)
+
+        handler.emergencyStop()
+        assertEquals(0f, handler.telemetry.value.targetPowerPercent, 0.01f)
+
+        handler.disconnect()
+        assertFalse(handler.config.value.isConnected)
+    }
+
+    @Test
+    fun testHardwareTelemetryParsing() {
+        val handler = MotorHandler()
+
+        // Test Roboteq Encoder
+        handler.parseHardwareTelemetryResponse("C=12345")
+        assertEquals(12345L, handler.telemetry.value.encoderCount)
+
+        // Test Roboteq Amps (A=15 -> 1.5A)
+        handler.parseHardwareTelemetryResponse("A=15")
+        assertEquals(1.5, handler.telemetry.value.currentAmps, 0.01)
+
+        // Test Roboteq Voltages (V=124:121:50 -> 12.4V)
+        handler.parseHardwareTelemetryResponse("V=124:121:50")
+        assertEquals(12.4, handler.telemetry.value.voltageVolts, 0.01)
+
+        // Test Roboteq Speed (S=1800 -> 1800 RPM)
+        handler.parseHardwareTelemetryResponse("S=1800")
+        assertEquals(1800, handler.telemetry.value.speedRpm)
+
+        // Test Phidgets Encoder & Current
+        handler.parseHardwareTelemetryResponse("P=-9876")
+        assertEquals(-9876L, handler.telemetry.value.encoderCount)
+
+        handler.parseHardwareTelemetryResponse("I=4.2")
+        assertEquals(4.2, handler.telemetry.value.currentAmps, 0.01)
+    }
+}

@@ -1,6 +1,7 @@
 package com.witt3d.autosteer.data.repository
 
 import com.witt3d.autosteer.hardware.ImuHandler
+import com.witt3d.autosteer.hardware.MotorHandler
 import com.witt3d.autosteer.hardware.gps.GpsHandler
 import com.witt3d.autosteer.hardware.gps.NtripClient
 
@@ -12,4 +13,5 @@ object HardwareRepository {
             gpsHandler.writeRtcmData(rtcmBytes)
         }
     )
+    val motorHandler = MotorHandler()
 }
