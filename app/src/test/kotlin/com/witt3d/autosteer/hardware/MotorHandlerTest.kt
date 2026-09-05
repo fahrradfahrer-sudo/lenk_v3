@@ -83,11 +83,43 @@ class MotorHandlerTest {
         handler.parseHardwareTelemetryResponse("S=1800")
         assertEquals(1800, handler.telemetry.value.speedRpm)
 
-        // Test Phidgets Encoder & Current
+        // Test Phidgets Encoder & Current & Voltage
         handler.parseHardwareTelemetryResponse("P=-9876")
         assertEquals(-9876L, handler.telemetry.value.encoderCount)
 
         handler.parseHardwareTelemetryResponse("I=4.2")
         assertEquals(4.2, handler.telemetry.value.currentAmps, 0.01)
+
+        handler.parseHardwareTelemetryResponse("V=12.5")
+        assertEquals(12.5, handler.telemetry.value.voltageVolts, 0.01)
+    }
+
+    @Test
+    fun testPhidgetsConfigAndSimulation() {
+        val handler = MotorHandler()
+        val phidgetConfig = MotorConfig(
+            motorType = MotorType.PHIDGETS,
+            phidgetChannel = 0,
+            phidgetCurrentLimit = 8.0,
+            phidgetAcceleration = 50.0,
+            isSimulationMode = true
+        )
+        handler.updateConfig(phidgetConfig)
+        handler.connect()
+
+        Thread.sleep(200)
+        assertTrue(handler.config.value.isConnected)
+        assertEquals(MotorType.PHIDGETS, handler.config.value.motorType)
+
+        handler.setTargetPowerPercent(-75f)
+        Thread.sleep(300)
+
+        val tele = handler.telemetry.value
+        assertEquals(-75f, tele.targetPowerPercent, 0.01f)
+        assertEquals(-75f, tele.actualPowerPercent, 0.01f)
+        assertTrue(tele.encoderCount < 0)
+
+        handler.disconnect()
+        assertFalse(handler.config.value.isConnected)
     }
 }

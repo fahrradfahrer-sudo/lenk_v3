@@ -3,9 +3,9 @@ package com.witt3d.autosteer.hardware
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.hardware.usb.UsbDevice
-import android.hardware.usb.UsbManager
+import android.hardware.usb.*
 import android.util.Log
+import com.hoho.android.usbserial.driver.CdcAcmSerialDriver
 import com.hoho.android.usbserial.driver.UsbSerialPort
 import com.hoho.android.usbserial.driver.UsbSerialProber
 import com.witt3d.autosteer.data.models.MotorConfig
@@ -28,12 +28,43 @@ class MotorHandler {
     val telemetry: StateFlow<MotorTelemetry> = _telemetry.asStateFlow()
 
     private var usbPort: UsbSerialPort? = null
+    private var usbConnection: UsbDeviceConnection? = null
+    private var usbInterface: UsbInterface? = null
+
     private var communicationJob: Job? = null
     private var simulationJob: Job? = null
     private var lastContext: Context? = null
+    private var isPermissionPending = false
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     private var currentTargetPowerPercent: Float = 0f
+
+    private fun getCustomMotorProber(): UsbSerialProber {
+        val probeTable = UsbSerialProber.getDefaultProbeTable()
+        // Phidgets VIDs (0x06C2 / 1730)
+        probeTable.addProduct(0x06C2, 0x003E, CdcAcmSerialDriver::class.java)
+        probeTable.addProduct(0x06C2, 0x0040, CdcAcmSerialDriver::class.java)
+        probeTable.addProduct(0x06C2, 0x0045, CdcAcmSerialDriver::class.java)
+        probeTable.addProduct(0x06C2, 0x0058, CdcAcmSerialDriver::class.java)
+        probeTable.addProduct(0x06C2, 0x0081, CdcAcmSerialDriver::class.java)
+        // Roboteq VIDs (0x20D1 / 8401, 0x0525 / 1317)
+        probeTable.addProduct(0x20D1, 0x5740, CdcAcmSerialDriver::class.java)
+        probeTable.addProduct(0x0525, 0xA4A7, CdcAcmSerialDriver::class.java)
+        return UsbSerialProber(probeTable)
+    }
+
+    private fun isMotorDevice(device: UsbDevice, targetMotorType: MotorType): Boolean {
+        val vid = device.vendorId
+        // NEVER match GPS or IMU devices
+        if (vid == 0x1546 || vid == 0x1A86 || vid == 0x4348 || vid == 5840 || vid == 0x16D0) {
+            return false
+        }
+        return when (targetMotorType) {
+            MotorType.ROBOTEQ -> vid == 0x20D1 || vid == 0x0525 || vid == 0x0403
+            MotorType.PHIDGETS -> vid == 0x06C2
+            MotorType.NONE_SIMULATED -> vid == 0x20D1 || vid == 0x0525 || vid == 0x06C2 || vid == 0x0403
+        }
+    }
 
     fun updateConfig(newConfig: MotorConfig) {
         val oldConfig = _config.value
@@ -50,32 +81,42 @@ class MotorHandler {
     fun scanUsbDevices(context: Context) {
         lastContext = context
         val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
-        val availableDrivers = UsbSerialProber.getDefaultProber().findAllDrivers(usbManager)
+        val currentType = _config.value.motorType
+        val prober = getCustomMotorProber()
+        val availableDrivers = prober.findAllDrivers(usbManager).filter { isMotorDevice(it.device, currentType) }
 
         if (availableDrivers.isNotEmpty()) {
             val device = availableDrivers[0].device
+            if (usbManager.hasPermission(device)) {
+                isPermissionPending = false
+            }
+            val devName = when (device.vendorId) {
+                0x06C2 -> "Phidget Motor Controller 1065_1B (${device.manufacturerName ?: "Phidgets"} - ${device.deviceName})"
+                0x20D1, 0x0525 -> "Roboteq Motor Controller (${device.manufacturerName ?: "Roboteq"} - ${device.deviceName})"
+                else -> "Motor Controller (${device.deviceName})"
+            }
             _config.value = _config.value.copy(
                 usbDeviceDetected = true,
-                usbDeviceName = device.deviceName ?: "USB Motor Controller Device"
+                usbDeviceName = devName
             )
             return
         }
 
         val rawDevices = usbManager.deviceList.values
-        val matchedDevice = rawDevices.firstOrNull { dev ->
-            // Roboteq VIDs: 0x20D1, 0x0525, FTDI VIDs: 0x0403, Phidget VIDs: 0x06C2
-            dev.vendorId == 0x20D1 || dev.vendorId == 0x0525 || dev.vendorId == 0x0403 || dev.vendorId == 0x06C2
-        }
+        val matchedDevice = rawDevices.firstOrNull { isMotorDevice(it, currentType) }
 
         if (matchedDevice != null) {
-            val name = when (matchedDevice.vendorId) {
-                0x20D1, 0x0525 -> "Roboteq Motor Controller (${matchedDevice.deviceName})"
-                0x06C2 -> "Phidget Motor Controller 1065_1B (${matchedDevice.deviceName})"
-                else -> "Motor Controller USB (${matchedDevice.deviceName})"
+            if (usbManager.hasPermission(matchedDevice)) {
+                isPermissionPending = false
+            }
+            val devName = when (matchedDevice.vendorId) {
+                0x06C2 -> "Phidget Motor Controller 1065_1B (${matchedDevice.manufacturerName ?: "Phidgets"} - ${matchedDevice.deviceName})"
+                0x20D1, 0x0525 -> "Roboteq Motor Controller (${matchedDevice.manufacturerName ?: "Roboteq"} - ${matchedDevice.deviceName})"
+                else -> "Motor Controller (${matchedDevice.deviceName})"
             }
             _config.value = _config.value.copy(
                 usbDeviceDetected = true,
-                usbDeviceName = name
+                usbDeviceName = devName
             )
         } else {
             _config.value = _config.value.copy(
@@ -124,28 +165,10 @@ class MotorHandler {
         }
 
         val usbManager = activeContext.getSystemService(Context.USB_SERVICE) as UsbManager
-        val availableDrivers = UsbSerialProber.getDefaultProber().findAllDrivers(usbManager)
+        val prober = getCustomMotorProber()
+        val availableDrivers = prober.findAllDrivers(usbManager).filter { isMotorDevice(it.device, currentConfig.motorType) }
 
-        if (availableDrivers.isEmpty()) {
-            // Check raw USB devices as fallback
-            val rawDevices = usbManager.deviceList.values
-            val motorDevice = rawDevices.firstOrNull { dev ->
-                dev.vendorId == 0x20D1 || dev.vendorId == 0x0525 || dev.vendorId == 0x0403 || dev.vendorId == 0x06C2
-            }
-
-            if (motorDevice == null) {
-                _config.value = currentConfig.copy(
-                    isConnected = false,
-                    errorMessage = "No USB Motor Controller found. Switch to Simulated mode for testing."
-                )
-                return
-            }
-
-            if (!usbManager.hasPermission(motorDevice)) {
-                requestUsbPermission(activeContext, usbManager, motorDevice)
-                return
-            }
-        } else {
+        if (availableDrivers.isNotEmpty()) {
             val driver = availableDrivers[0]
             val device: UsbDevice = driver.device
 
@@ -167,7 +190,7 @@ class MotorHandler {
                 _config.value = currentConfig.copy(
                     isConnected = true,
                     usbDeviceDetected = true,
-                    usbDeviceName = device.deviceName,
+                    usbDeviceName = "${device.manufacturerName ?: "Motor"} (${device.deviceName})",
                     errorMessage = null
                 )
 
@@ -185,10 +208,107 @@ class MotorHandler {
                     errorMessage = e.message ?: "USB connection error"
                 )
             }
+        } else {
+            // Check raw USB devices as fallback (e.g. Phidgets 1065_1B USB HID / raw USB Host connection)
+            val rawDevices = usbManager.deviceList.values
+            val motorDevice = rawDevices.firstOrNull { isMotorDevice(it, currentConfig.motorType) }
+
+            if (motorDevice == null) {
+                _config.value = currentConfig.copy(
+                    isConnected = false,
+                    errorMessage = "No matching ${currentConfig.motorType.name} Motor Controller found. Switch to Simulated mode for testing."
+                )
+                return
+            }
+
+            if (!usbManager.hasPermission(motorDevice)) {
+                requestUsbPermission(activeContext, usbManager, motorDevice)
+                return
+            }
+
+            // Direct Raw USB Host Connection for Phidgets / USB HID
+            try {
+                connectRawUsbDevice(usbManager, motorDevice)
+                return
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed raw USB connection to motor device", e)
+                _config.value = currentConfig.copy(
+                    isConnected = false,
+                    errorMessage = e.message ?: "Raw USB connection error"
+                )
+            }
+        }
+    }
+
+    private fun connectRawUsbDevice(usbManager: UsbManager, device: UsbDevice) {
+        val connection = usbManager.openDevice(device)
+            ?: throw IOException("Failed to open UsbDeviceConnection for ${device.deviceName}")
+
+        val iface = device.getInterface(0)
+        if (!connection.claimInterface(iface, true)) {
+            connection.close()
+            throw IOException("Could not claim USB Interface 0 for ${device.deviceName}")
+        }
+
+        usbConnection = connection
+        usbInterface = iface
+
+        val currentConfig = _config.value
+        val devName = "${device.manufacturerName ?: "Phidgets"} (${device.productName ?: "1065_1B"})"
+
+        _config.value = currentConfig.copy(
+            isConnected = true,
+            usbDeviceDetected = true,
+            usbDeviceName = devName,
+            errorMessage = null
+        )
+
+        _telemetry.value = _telemetry.value.copy(
+            isConnected = true,
+            statusMessage = "Connected to ${currentConfig.motorType.name} USB Device"
+        )
+
+        startRawUsbCommunicationLoop(connection, iface)
+    }
+
+    private fun startRawUsbCommunicationLoop(connection: UsbDeviceConnection, iface: UsbInterface) {
+        communicationJob = scope.launch {
+            var endpointIn: UsbEndpoint? = null
+
+            for (i in 0 until iface.endpointCount) {
+                val ep = iface.getEndpoint(i)
+                if (ep.direction == UsbConstants.USB_DIR_IN) {
+                    endpointIn = ep
+                    break
+                }
+            }
+
+            val readBuffer = ByteArray(64)
+            while (isActive) {
+                try {
+                    if (endpointIn != null) {
+                        val len = connection.bulkTransfer(endpointIn, readBuffer, readBuffer.size, 100)
+                        if (len > 0) {
+                            val text = String(readBuffer, 0, len, Charsets.US_ASCII)
+                            if (text.contains("=")) {
+                                parseHardwareTelemetryResponse(text)
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error in raw USB communication loop", e)
+                }
+                delay(100)
+            }
         }
     }
 
     private fun requestUsbPermission(context: Context, usbManager: UsbManager, device: UsbDevice) {
+        if (isPermissionPending) {
+            Log.d(TAG, "USB Permission request already pending for device: ${device.deviceName}")
+            return
+        }
+        isPermissionPending = true
         val intent = Intent("com.witt3d.autosteer.USB_PERMISSION").apply {
             setPackage(context.packageName)
         }
@@ -206,6 +326,7 @@ class MotorHandler {
         communicationJob = null
         simulationJob?.cancel()
         simulationJob = null
+        isPermissionPending = false
 
         try {
             usbPort?.close()
@@ -213,6 +334,22 @@ class MotorHandler {
             Log.e(TAG, "Error closing motor USB port", e)
         }
         usbPort = null
+
+        val conn = usbConnection
+        val iface = usbInterface
+        usbConnection = null
+        usbInterface = null
+
+        if (conn != null) {
+            try {
+                if (iface != null) {
+                    conn.releaseInterface(iface)
+                }
+                conn.close()
+            } catch (e: Exception) {
+                Log.e(TAG, "Error closing raw USB connection", e)
+            }
+        }
 
         _config.value = _config.value.copy(isConnected = false)
         _telemetry.value = _telemetry.value.copy(
@@ -292,7 +429,6 @@ class MotorHandler {
     }
 
     private fun sendPhidgetPowerCommand(powerPercent: Float) {
-        val port = usbPort ?: return
         val config = _config.value
 
         var effectivePowerPercent = powerPercent
@@ -303,13 +439,43 @@ class MotorHandler {
         val maxLimitRatio = (config.maxPowerLimitPercent.coerceIn(0, 100) / 100.0f)
         val dutyCycle = (effectivePowerPercent * maxLimitRatio).coerceIn(-100f, 100f)
 
-        val command = "!DUTY ${config.phidgetChannel} ${String.format("%.2f", dutyCycle)}\r"
-        scope.launch {
-            try {
-                port.write(command.toByteArray(Charsets.US_ASCII), 200)
-                _telemetry.value = _telemetry.value.copy(actualPowerPercent = dutyCycle)
-            } catch (e: Exception) {
-                Log.e(TAG, "Error sending Phidget command", e)
+        val port = usbPort
+        if (port != null) {
+            val command = "!DUTY ${config.phidgetChannel} ${String.format("%.2f", dutyCycle)}\r"
+            scope.launch {
+                try {
+                    port.write(command.toByteArray(Charsets.US_ASCII), 200)
+                    _telemetry.value = _telemetry.value.copy(actualPowerPercent = dutyCycle)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error sending Phidget command over serial", e)
+                }
+            }
+        } else {
+            val conn = usbConnection
+            val iface = usbInterface
+            if (conn != null && iface != null) {
+                scope.launch {
+                    try {
+                        var endpointOut: UsbEndpoint? = null
+                        for (i in 0 until iface.endpointCount) {
+                            val ep = iface.getEndpoint(i)
+                            if (ep.direction == UsbConstants.USB_DIR_OUT) {
+                                endpointOut = ep
+                                break
+                            }
+                        }
+                        val command = "!DUTY ${config.phidgetChannel} ${String.format("%.2f", dutyCycle)}\r"
+                        val bytes = command.toByteArray(Charsets.US_ASCII)
+                        if (endpointOut != null) {
+                            conn.bulkTransfer(endpointOut, bytes, bytes.size, 200)
+                        } else {
+                            conn.controlTransfer(0x21, 0x09, 0x0200, 0, bytes, bytes.size, 200)
+                        }
+                        _telemetry.value = _telemetry.value.copy(actualPowerPercent = dutyCycle)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error sending Phidget command over raw USB", e)
+                    }
+                }
             }
         }
     }
@@ -333,13 +499,19 @@ class MotorHandler {
                         _telemetry.value = current.copy(currentAmps = rawAmps / 10.0)
                     }
                 }
-                // Roboteq Voltages (e.g., "V=124:121:50" -> 12.4V)
                 response.startsWith("V=") -> {
-                    val parts = response.substring(2).split(":")
-                    if (parts.isNotEmpty()) {
+                    val rawStr = response.substring(2).trim()
+                    if (rawStr.contains(":")) {
+                        val parts = rawStr.split(":")
                         val volts = parts[0].toDoubleOrNull()
                         if (volts != null) {
                             _telemetry.value = current.copy(voltageVolts = volts / 10.0)
+                        }
+                    } else {
+                        val volts = rawStr.toDoubleOrNull()
+                        if (volts != null) {
+                            val actualVolts = if (volts > 50.0) volts / 10.0 else volts
+                            _telemetry.value = current.copy(voltageVolts = actualVolts)
                         }
                     }
                 }
@@ -350,7 +522,7 @@ class MotorHandler {
                         _telemetry.value = current.copy(speedRpm = rpm)
                     }
                 }
-                // Phidget responses (e.g., "P=12345", "I=2.5", "V=12.1")
+                // Phidget responses (e.g., "P=12345", "I=2.5")
                 response.startsWith("P=") -> {
                     val count = response.substring(2).trim().toLongOrNull()
                     if (count != null) {

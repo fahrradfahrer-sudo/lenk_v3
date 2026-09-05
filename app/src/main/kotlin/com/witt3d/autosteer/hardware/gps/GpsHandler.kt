@@ -39,25 +39,36 @@ class GpsHandler {
         _config.value = newConfig
     }
 
+    private fun isGpsDevice(device: UsbDevice): Boolean {
+        val vid = device.vendorId
+        // Exclude Motor Controllers (Phidgets, Roboteq) and IMUs (Tinkerforge)
+        if (vid == 0x06C2 || vid == 1730 || vid == 0x20D1 || vid == 8401 || vid == 0x0525 || vid == 1317 || vid == 0x16D0 || vid == 5840) {
+            return false
+        }
+        // Match u-blox, CH340/CH341, FTDI, Prolific, Silicon Labs CP210x
+        return vid == 0x1546 || vid == 5446 || vid == 0x1A86 || vid == 6790 || vid == 0x4348 || vid == 0x0403 || vid == 0x10C4 || vid == 0x067B
+    }
+
     fun scanUsbDevices(context: Context) {
         val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
         val availableDrivers = UsbSerialProber.getDefaultProber().findAllDrivers(usbManager)
-        if (availableDrivers.isNotEmpty()) {
-            val device = availableDrivers[0].device
+        val gpsDrivers = availableDrivers.filter { isGpsDevice(it.device) }
+
+        if (gpsDrivers.isNotEmpty()) {
+            val device = gpsDrivers[0].device
+            val devName = "${device.manufacturerName ?: "u-blox"} (${device.productName ?: "GPS Receiver"})"
             _config.value = _config.value.copy(
                 usbDeviceDetected = true,
-                usbDeviceName = device.deviceName ?: "u-blox F9P Device"
+                usbDeviceName = devName
             )
         } else {
-            // Check direct raw usb devices for vendor IDs
             val rawDevices = usbManager.deviceList.values
-            val matchedDevice = rawDevices.firstOrNull { dev ->
-                dev.vendorId == 0x1546 || dev.vendorId == 5446 || dev.vendorId == 0x0403 || dev.vendorId == 0x1a86
-            }
+            val matchedDevice = rawDevices.firstOrNull { isGpsDevice(it) }
             if (matchedDevice != null) {
+                val devName = "${matchedDevice.manufacturerName ?: "u-blox"} (${matchedDevice.productName ?: "GPS Receiver"})"
                 _config.value = _config.value.copy(
                     usbDeviceDetected = true,
-                    usbDeviceName = matchedDevice.deviceName
+                    usbDeviceName = devName
                 )
             } else {
                 _config.value = _config.value.copy(
@@ -87,16 +98,17 @@ class GpsHandler {
 
         val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
         val availableDrivers = UsbSerialProber.getDefaultProber().findAllDrivers(usbManager)
+        val gpsDrivers = availableDrivers.filter { isGpsDevice(it.device) }
 
-        if (availableDrivers.isEmpty()) {
+        if (gpsDrivers.isEmpty()) {
             _config.value = currentConfig.copy(
                 isConnected = false,
-                errorMessage = "No USB Serial devices found. Enable Simulation mode to test."
+                errorMessage = "No USB GPS receiver found. Enable Simulation mode to test."
             )
             return
         }
 
-        val driver = availableDrivers[0]
+        val driver = gpsDrivers[0]
         val device: UsbDevice = driver.device
 
         if (!usbManager.hasPermission(device)) {
