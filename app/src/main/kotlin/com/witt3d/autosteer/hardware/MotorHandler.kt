@@ -9,7 +9,6 @@ import android.hardware.usb.*
 import android.os.Build
 import android.util.Log
 import com.hoho.android.usbserial.driver.CdcAcmSerialDriver
-import com.hoho.android.usbserial.driver.FtdiSerialDriver
 import com.hoho.android.usbserial.driver.UsbSerialPort
 import com.hoho.android.usbserial.driver.UsbSerialProber
 import com.witt3d.autosteer.data.models.MotorConfig
@@ -88,15 +87,9 @@ class MotorHandler {
     private fun getCustomMotorProber(): UsbSerialProber {
         val probeTable = UsbSerialProber.getDefaultProbeTable()
         // Roboteq VIDs (0x20D1 / 8401, 0x0525 / 1317) using CDC ACM driver
+        // Note: Phidgets motor controllers (0x06C2) use raw USB / HID endpoints and are purposely excluded from CDC serial prober
         probeTable.addProduct(0x20D1, 0x5740, CdcAcmSerialDriver::class.java)
         probeTable.addProduct(0x0525, 0xA4A7, CdcAcmSerialDriver::class.java)
-
-        // Phidgets VIDs (0x06C2) with serial interface probing (CDC ACM / FTDI), with raw USB fallback
-        val phidgetPids = intArrayOf(0x0045, 0x0058, 0x0082, 0x0053, 0x003d, 0x0040)
-        for (pid in phidgetPids) {
-            probeTable.addProduct(0x06C2, pid, CdcAcmSerialDriver::class.java)
-            probeTable.addProduct(0x06C2, pid, FtdiSerialDriver::class.java)
-        }
         return UsbSerialProber(probeTable)
     }
 
@@ -225,9 +218,11 @@ class MotorHandler {
                 return
             }
 
+            var connToClose: UsbDeviceConnection? = null
             try {
                 val connection = usbManager.openDevice(device)
                     ?: throw IOException("Failed to open USB motor controller device")
+                connToClose = connection
 
                 val baud = if (currentConfig.motorType == MotorType.ROBOTEQ) currentConfig.roboteqBaudRate else 115200
                 val port = driver.ports[0]
@@ -251,6 +246,9 @@ class MotorHandler {
                 return
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to connect to USB motor device via serial driver, attempting raw USB fallback", e)
+                try {
+                    connToClose?.close()
+                } catch (ignored: Exception) {}
             }
         }
 
@@ -288,31 +286,38 @@ class MotorHandler {
         val connection = usbManager.openDevice(device)
             ?: throw IOException("Failed to open UsbDeviceConnection for ${device.deviceName}")
 
-        val iface = device.getInterface(0)
-        if (!connection.claimInterface(iface, true)) {
-            connection.close()
-            throw IOException("Could not claim USB Interface 0 for ${device.deviceName}")
+        try {
+            val iface = device.getInterface(0)
+            if (!connection.claimInterface(iface, true)) {
+                connection.close()
+                throw IOException("Could not claim USB Interface 0 for ${device.deviceName}")
+            }
+
+            usbConnection = connection
+            usbInterface = iface
+
+            val currentConfig = _config.value
+            val devName = "${device.manufacturerName ?: "Phidgets"} (${device.productName ?: "1065_1B"})"
+
+            _config.value = currentConfig.copy(
+                isConnected = true,
+                usbDeviceDetected = true,
+                usbDeviceName = devName,
+                errorMessage = null
+            )
+
+            _telemetry.value = _telemetry.value.copy(
+                isConnected = true,
+                statusMessage = "Connected to ${currentConfig.motorType.name} USB Device"
+            )
+
+            startRawUsbCommunicationLoop(connection, iface)
+        } catch (e: Exception) {
+            try {
+                connection.close()
+            } catch (ignored: Exception) {}
+            throw e
         }
-
-        usbConnection = connection
-        usbInterface = iface
-
-        val currentConfig = _config.value
-        val devName = "${device.manufacturerName ?: "Phidgets"} (${device.productName ?: "1065_1B"})"
-
-        _config.value = currentConfig.copy(
-            isConnected = true,
-            usbDeviceDetected = true,
-            usbDeviceName = devName,
-            errorMessage = null
-        )
-
-        _telemetry.value = _telemetry.value.copy(
-            isConnected = true,
-            statusMessage = "Connected to ${currentConfig.motorType.name} USB Device"
-        )
-
-        startRawUsbCommunicationLoop(connection, iface)
     }
 
     private fun startRawUsbCommunicationLoop(connection: UsbDeviceConnection, iface: UsbInterface) {
