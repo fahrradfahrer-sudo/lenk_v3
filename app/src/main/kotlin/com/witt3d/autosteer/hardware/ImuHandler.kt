@@ -301,8 +301,8 @@ class ImuHandler {
         }.array()
 
         try {
-            connection.bulkTransfer(endpointOut, periodPacket, periodPacket.size, 1000)
-            connection.bulkTransfer(endpointOut, accelPeriodPacket, accelPeriodPacket.size, 1000)
+            connection.bulkTransfer(endpointOut, periodPacket, 0, periodPacket.size, 1000)
+            connection.bulkTransfer(endpointOut, accelPeriodPacket, 0, accelPeriodPacket.size, 1000)
         } catch (e: Exception) {
             Log.e(TAG, "Error sending USB IMU configuration packets", e)
         }
@@ -316,10 +316,11 @@ class ImuHandler {
 
             while (isActive) {
                 try {
-                    val read = connection.bulkTransfer(endpointIn, readBuffer, readBuffer.size, 200)
+                    val read = connection.bulkTransfer(endpointIn, readBuffer, 0, readBuffer.size, 200)
                     if (read > 0) {
-                        System.arraycopy(readBuffer, 0, packetBuffer, packetBufLen, read)
-                        packetBufLen += read
+                        val safeRead = read.coerceAtMost(readBuffer.size)
+                        System.arraycopy(readBuffer, 0, packetBuffer, packetBufLen, safeRead)
+                        packetBufLen += safeRead
 
                         // Parse full Tinkerforge packets
                         while (packetBufLen >= 8) {
@@ -348,7 +349,7 @@ class ImuHandler {
                             put(0.toByte())
                             put(0.toByte())
                         }.array()
-                        connection.bulkTransfer(endpointOut, getOrientationPacket, getOrientationPacket.size, 200)
+                        connection.bulkTransfer(endpointOut, getOrientationPacket, 0, getOrientationPacket.size, 200)
                     }
                 } catch (e: Exception) {
                     if (isActive) Log.e(TAG, "Error reading native USB IMU bulk stream", e)

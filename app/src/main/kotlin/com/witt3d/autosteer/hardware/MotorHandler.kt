@@ -311,24 +311,47 @@ class MotorHandler {
     private fun startRawUsbCommunicationLoop(connection: UsbDeviceConnection, iface: UsbInterface) {
         communicationJob = scope.launch {
             var endpointIn: UsbEndpoint? = null
+            var endpointOut: UsbEndpoint? = null
 
             for (i in 0 until iface.endpointCount) {
                 val ep = iface.getEndpoint(i)
                 if (ep.direction == UsbConstants.USB_DIR_IN) {
                     endpointIn = ep
-                    break
+                } else if (ep.direction == UsbConstants.USB_DIR_OUT) {
+                    endpointOut = ep
                 }
             }
 
-            val readBuffer = ByteArray(64)
+            val readBuffer = ByteArray(256)
+            val sb = StringBuilder()
+
             while (isActive) {
                 try {
+                    // Periodically send query commands for Phidgets over USB OUT endpoint if present
+                    if (endpointOut != null && _config.value.motorType == MotorType.PHIDGETS) {
+                        val queryCmd = "?P\r?I\r?V\r"
+                        val queryBytes = queryCmd.toByteArray(Charsets.US_ASCII)
+                        connection.bulkTransfer(endpointOut, queryBytes, 0, queryBytes.size, 200)
+                    }
+
                     if (endpointIn != null) {
-                        val len = connection.bulkTransfer(endpointIn, readBuffer, readBuffer.size, 100)
+                        val len = connection.bulkTransfer(endpointIn, readBuffer, 0, readBuffer.size, 100)
                         if (len > 0) {
-                            val text = String(readBuffer, 0, len, Charsets.US_ASCII)
-                            if (text.contains("=")) {
-                                parseHardwareTelemetryResponse(text)
+                            val safeLen = len.coerceAtMost(readBuffer.size)
+                            val text = String(readBuffer, 0, safeLen, Charsets.US_ASCII)
+                            sb.append(text)
+
+                            var newlineIndex = sb.indexOf("\r")
+                            if (newlineIndex < 0) newlineIndex = sb.indexOf("\n")
+
+                            while (newlineIndex >= 0) {
+                                val line = sb.substring(0, newlineIndex).trim()
+                                sb.delete(0, newlineIndex + 1)
+                                if (line.isNotEmpty()) {
+                                    parseHardwareTelemetryResponse(line)
+                                }
+                                newlineIndex = sb.indexOf("\r")
+                                if (newlineIndex < 0) newlineIndex = sb.indexOf("\n")
                             }
                         }
                     }
@@ -545,7 +568,7 @@ class MotorHandler {
                         val command = "!DUTY ${config.phidgetChannel} ${String.format("%.2f", dutyCycle)}\r"
                         val bytes = command.toByteArray(Charsets.US_ASCII)
                         if (endpointOut != null) {
-                            conn.bulkTransfer(endpointOut, bytes, bytes.size, 200)
+                            conn.bulkTransfer(endpointOut, bytes, 0, bytes.size, 200)
                         } else {
                             conn.controlTransfer(0x21, 0x09, 0x0200, 0, bytes, bytes.size, 200)
                         }
