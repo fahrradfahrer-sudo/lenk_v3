@@ -9,6 +9,7 @@ import android.hardware.usb.*
 import android.os.Build
 import android.util.Log
 import com.hoho.android.usbserial.driver.CdcAcmSerialDriver
+import com.hoho.android.usbserial.driver.FtdiSerialDriver
 import com.hoho.android.usbserial.driver.UsbSerialPort
 import com.hoho.android.usbserial.driver.UsbSerialProber
 import com.witt3d.autosteer.data.models.MotorConfig
@@ -87,9 +88,15 @@ class MotorHandler {
     private fun getCustomMotorProber(): UsbSerialProber {
         val probeTable = UsbSerialProber.getDefaultProbeTable()
         // Roboteq VIDs (0x20D1 / 8401, 0x0525 / 1317) using CDC ACM driver
-        // Note: Phidgets motor controllers (0x06C2) use raw USB / HID endpoints and are purposely excluded from CDC serial prober
         probeTable.addProduct(0x20D1, 0x5740, CdcAcmSerialDriver::class.java)
         probeTable.addProduct(0x0525, 0xA4A7, CdcAcmSerialDriver::class.java)
+
+        // Phidgets VIDs (0x06C2) with serial interface probing (CDC ACM / FTDI), with raw USB fallback
+        val phidgetPids = intArrayOf(0x0045, 0x0058, 0x0082, 0x0053, 0x003d, 0x0040)
+        for (pid in phidgetPids) {
+            probeTable.addProduct(0x06C2, pid, CdcAcmSerialDriver::class.java)
+            probeTable.addProduct(0x06C2, pid, FtdiSerialDriver::class.java)
+        }
         return UsbSerialProber(probeTable)
     }
 
@@ -315,9 +322,11 @@ class MotorHandler {
 
             for (i in 0 until iface.endpointCount) {
                 val ep = iface.getEndpoint(i)
-                if (ep.direction == UsbConstants.USB_DIR_IN) {
+                if (ep.direction == UsbConstants.USB_DIR_IN &&
+                    (ep.type == UsbConstants.USB_ENDPOINT_XFER_BULK || ep.type == UsbConstants.USB_ENDPOINT_XFER_INT)) {
                     endpointIn = ep
-                } else if (ep.direction == UsbConstants.USB_DIR_OUT) {
+                } else if (ep.direction == UsbConstants.USB_DIR_OUT &&
+                    (ep.type == UsbConstants.USB_ENDPOINT_XFER_BULK || ep.type == UsbConstants.USB_ENDPOINT_XFER_INT)) {
                     endpointOut = ep
                 }
             }
@@ -329,13 +338,23 @@ class MotorHandler {
                 try {
                     // Periodically send query commands for Phidgets over USB OUT endpoint if present
                     if (endpointOut != null && _config.value.motorType == MotorType.PHIDGETS) {
-                        val queryCmd = "?P\r?I\r?V\r"
-                        val queryBytes = queryCmd.toByteArray(Charsets.US_ASCII)
-                        connection.bulkTransfer(endpointOut, queryBytes, 0, queryBytes.size, 200)
+                        try {
+                            val queryCmd = "?P\r?I\r?V\r"
+                            val queryBytes = queryCmd.toByteArray(Charsets.US_ASCII)
+                            connection.bulkTransfer(endpointOut, queryBytes, 0, queryBytes.size, 200)
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Failed sending query to USB OUT endpoint: ${e.message}")
+                        }
                     }
 
                     if (endpointIn != null) {
-                        val len = connection.bulkTransfer(endpointIn, readBuffer, 0, readBuffer.size, 100)
+                        val len = try {
+                            connection.bulkTransfer(endpointIn, readBuffer, 0, readBuffer.size, 100)
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Bulk transfer error on USB IN endpoint: ${e.message}")
+                            -1
+                        }
+
                         if (len > 0) {
                             val safeLen = len.coerceAtMost(readBuffer.size)
                             val text = String(readBuffer, 0, safeLen, Charsets.US_ASCII)
@@ -560,7 +579,8 @@ class MotorHandler {
                         var endpointOut: UsbEndpoint? = null
                         for (i in 0 until iface.endpointCount) {
                             val ep = iface.getEndpoint(i)
-                            if (ep.direction == UsbConstants.USB_DIR_OUT) {
+                            if (ep.direction == UsbConstants.USB_DIR_OUT &&
+                                (ep.type == UsbConstants.USB_ENDPOINT_XFER_BULK || ep.type == UsbConstants.USB_ENDPOINT_XFER_INT)) {
                                 endpointOut = ep
                                 break
                             }
