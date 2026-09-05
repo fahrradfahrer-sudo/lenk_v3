@@ -1,9 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- u-blox ZED-F9P -->
-    <usb-device vendor-id="4348" product-id="5523" /> <!-- Example IDs, often CH340 or similar -->
-    <usb-device vendor-id="5446" product-id="423" />  <!-- u-blox AG -->
+    <!-- u-blox ZED-F9P & USB Serial Converters -->
+    <usb-device vendor-id="5446" /> <!-- 0x1546 u-blox AG -->
+    <usb-device vendor-id="4348" /> <!-- CH341 / CH340 -->
+    <usb-device vendor-id="6790" /> <!-- 0x1A86 QinHeng Electronics CH340 -->
+    <usb-device vendor-id="1027" /> <!-- 0x0403 FTDI -->
 
     <!-- Tinkerforge Bricks / IMU Brick v2 -->
     <usb-device vendor-id="5840" /> <!-- 0x16D0 Tinkerforge GmbH -->
+
+    <!-- Phidgets Motor Controllers -->
+    <usb-device vendor-id="1730" /> <!-- 0x06C2 Phidgets Inc. -->
+
+    <!-- Roboteq Motor Controllers -->
+    <usb-device vendor-id="8401" /> <!-- 0x20D1 Roboteq -->
+    <usb-device vendor-id="1317" /> <!-- 0x0525 Roboteq -->
 </resources>

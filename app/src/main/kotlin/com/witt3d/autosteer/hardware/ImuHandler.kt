@@ -42,6 +42,7 @@ class ImuHandler {
     private var usbInterface: UsbInterface? = null
     private var appContext: Context? = null
     private var isUsbReceiverRegistered = false
+    private var isPermissionPending = false
 
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
@@ -134,6 +135,9 @@ class ImuHandler {
         val firstDevice = tinkerforgeDevices.firstOrNull()
         if (firstDevice != null) {
             val hasPerm = usbManager.hasPermission(firstDevice)
+            if (hasPerm) {
+                isPermissionPending = false
+            }
             val devName = "${firstDevice.manufacturerName ?: "Tinkerforge"} (${firstDevice.productName ?: "IMU Brick 2.0"})"
             _config.value = _config.value.copy(
                 usbDeviceDetected = true,
@@ -141,7 +145,7 @@ class ImuHandler {
             )
             Log.d(TAG, "Detected USB IMU Device: $devName, Has Permission: $hasPerm")
 
-            if (!hasPerm) {
+            if (!hasPerm && !isPermissionPending) {
                 requestUsbPermission(context, usbManager, firstDevice)
             }
         } else {
@@ -155,6 +159,11 @@ class ImuHandler {
     }
 
     private fun requestUsbPermission(context: Context, usbManager: UsbManager, device: UsbDevice) {
+        if (isPermissionPending) {
+            Log.d(TAG, "USB Permission request already pending for device: ${device.deviceName}")
+            return
+        }
+        isPermissionPending = true
         try {
             val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
@@ -173,6 +182,7 @@ class ImuHandler {
                     if (ACTION_USB_PERMISSION == intent?.action) {
                         synchronized(this) {
                             c?.unregisterReceiver(this)
+                            isPermissionPending = false
                             val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
                             Log.d(TAG, "USB Permission callback result: $granted")
                             if (granted) {
@@ -197,6 +207,7 @@ class ImuHandler {
             usbManager.requestPermission(device, permissionIntent)
             Log.d(TAG, "Requested USB Permission for device: ${device.deviceName}")
         } catch (e: Exception) {
+            isPermissionPending = false
             Log.e(TAG, "Error requesting USB permission", e)
         }
     }
@@ -226,7 +237,9 @@ class ImuHandler {
 
         if (!usbManager.hasPermission(device)) {
             Log.w(TAG, "USB permission missing for device: ${device.deviceName}")
-            requestUsbPermission(context, usbManager, device)
+            if (!isPermissionPending) {
+                requestUsbPermission(context, usbManager, device)
+            }
             return@withContext false
         }
 
@@ -560,10 +573,10 @@ class ImuHandler {
         retryJob = null
         stopSimulation()
         stopUsbDirect()
+        _config.value = _config.value.copy(isConnected = false)
         scope.launch(Dispatchers.IO) {
             try {
                 safelyDisconnectIpcon()
-                _config.value = _config.value.copy(isConnected = false)
                 Log.d(TAG, "Disconnected IMU Handler")
             } catch (e: Exception) {
                 Log.e(TAG, "Error disconnecting IMU Handler", e)
