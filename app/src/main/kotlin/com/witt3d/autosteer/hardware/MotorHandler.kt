@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.io.IOException
+import java.nio.ByteBuffer
 import kotlin.math.roundToInt
 
 class MotorHandler {
@@ -218,9 +219,11 @@ class MotorHandler {
                 return
             }
 
+            var connToClose: UsbDeviceConnection? = null
             try {
                 val connection = usbManager.openDevice(device)
                     ?: throw IOException("Failed to open USB motor controller device")
+                connToClose = connection
 
                 val baud = if (currentConfig.motorType == MotorType.ROBOTEQ) currentConfig.roboteqBaudRate else 115200
                 val port = driver.ports[0]
@@ -244,6 +247,9 @@ class MotorHandler {
                 return
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to connect to USB motor device via serial driver, attempting raw USB fallback", e)
+                try {
+                    connToClose?.close()
+                } catch (ignored: Exception) {}
             }
         }
 
@@ -281,54 +287,127 @@ class MotorHandler {
         val connection = usbManager.openDevice(device)
             ?: throw IOException("Failed to open UsbDeviceConnection for ${device.deviceName}")
 
-        val iface = device.getInterface(0)
-        if (!connection.claimInterface(iface, true)) {
-            connection.close()
-            throw IOException("Could not claim USB Interface 0 for ${device.deviceName}")
+        try {
+            val iface = device.getInterface(0)
+            if (!connection.claimInterface(iface, true)) {
+                connection.close()
+                throw IOException("Could not claim USB Interface 0 for ${device.deviceName}")
+            }
+
+            usbConnection = connection
+            usbInterface = iface
+
+            val currentConfig = _config.value
+            val devName = "${device.manufacturerName ?: "Phidgets"} (${device.productName ?: "1065_1B"})"
+
+            _config.value = currentConfig.copy(
+                isConnected = true,
+                usbDeviceDetected = true,
+                usbDeviceName = devName,
+                errorMessage = null
+            )
+
+            _telemetry.value = _telemetry.value.copy(
+                isConnected = true,
+                statusMessage = "Connected to ${currentConfig.motorType.name} USB Device"
+            )
+
+            startRawUsbCommunicationLoop(connection, iface)
+        } catch (e: Exception) {
+            try {
+                connection.close()
+            } catch (ignored: Exception) {}
+            throw e
         }
-
-        usbConnection = connection
-        usbInterface = iface
-
-        val currentConfig = _config.value
-        val devName = "${device.manufacturerName ?: "Phidgets"} (${device.productName ?: "1065_1B"})"
-
-        _config.value = currentConfig.copy(
-            isConnected = true,
-            usbDeviceDetected = true,
-            usbDeviceName = devName,
-            errorMessage = null
-        )
-
-        _telemetry.value = _telemetry.value.copy(
-            isConnected = true,
-            statusMessage = "Connected to ${currentConfig.motorType.name} USB Device"
-        )
-
-        startRawUsbCommunicationLoop(connection, iface)
     }
 
     private fun startRawUsbCommunicationLoop(connection: UsbDeviceConnection, iface: UsbInterface) {
         communicationJob = scope.launch {
             var endpointIn: UsbEndpoint? = null
+            var endpointOut: UsbEndpoint? = null
 
             for (i in 0 until iface.endpointCount) {
                 val ep = iface.getEndpoint(i)
                 if (ep.direction == UsbConstants.USB_DIR_IN) {
                     endpointIn = ep
-                    break
+                } else if (ep.direction == UsbConstants.USB_DIR_OUT) {
+                    endpointOut = ep
                 }
             }
 
-            val readBuffer = ByteArray(64)
+            val readBuffer = ByteArray(256)
+            val sb = StringBuilder()
+
             while (isActive) {
                 try {
+                    // Periodically send query commands for Phidgets over USB OUT endpoint if present
+                    if (endpointOut != null && _config.value.motorType == MotorType.PHIDGETS) {
+                        try {
+                            val queryCmd = "?P\r?I\r?V\r"
+                            val queryBytes = queryCmd.toByteArray(Charsets.US_ASCII)
+                            if (endpointOut.type == UsbConstants.USB_ENDPOINT_XFER_BULK) {
+                                connection.bulkTransfer(endpointOut, queryBytes, 0, queryBytes.size, 200)
+                            } else if (endpointOut.type == UsbConstants.USB_ENDPOINT_XFER_INT) {
+                                val outRequest = UsbRequest()
+                                outRequest.initialize(connection, endpointOut)
+                                val outBuf = ByteBuffer.wrap(queryBytes)
+                                if (outRequest.queue(outBuf)) {
+                                    connection.requestWait(200)
+                                }
+                                outRequest.close()
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Failed sending query to USB OUT endpoint: ${e.message}")
+                        }
+                    }
+
                     if (endpointIn != null) {
-                        val len = connection.bulkTransfer(endpointIn, readBuffer, readBuffer.size, 100)
+                        var len = -1
+                        if (endpointIn.type == UsbConstants.USB_ENDPOINT_XFER_BULK) {
+                            len = try {
+                                connection.bulkTransfer(endpointIn, readBuffer, 0, readBuffer.size, 100)
+                            } catch (e: Exception) {
+                                Log.w(TAG, "Bulk transfer error on USB IN endpoint: ${e.message}")
+                                -1
+                            }
+                        } else if (endpointIn.type == UsbConstants.USB_ENDPOINT_XFER_INT) {
+                            try {
+                                val inRequest = UsbRequest()
+                                inRequest.initialize(connection, endpointIn)
+                                val inBuf = ByteBuffer.allocate(readBuffer.size)
+                                if (inRequest.queue(inBuf)) {
+                                    val req = connection.requestWait(100)
+                                    if (req == inRequest) {
+                                        inBuf.flip()
+                                        len = inBuf.remaining()
+                                        if (len > 0) {
+                                            inBuf.get(readBuffer, 0, len)
+                                        }
+                                    }
+                                }
+                                inRequest.close()
+                            } catch (e: Exception) {
+                                Log.w(TAG, "UsbRequest error on USB INT IN endpoint: ${e.message}")
+                                len = -1
+                            }
+                        }
+
                         if (len > 0) {
-                            val text = String(readBuffer, 0, len, Charsets.US_ASCII)
-                            if (text.contains("=")) {
-                                parseHardwareTelemetryResponse(text)
+                            val safeLen = len.coerceAtMost(readBuffer.size)
+                            val text = String(readBuffer, 0, safeLen, Charsets.US_ASCII)
+                            sb.append(text)
+
+                            var newlineIndex = sb.indexOf("\r")
+                            if (newlineIndex < 0) newlineIndex = sb.indexOf("\n")
+
+                            while (newlineIndex >= 0) {
+                                val line = sb.substring(0, newlineIndex).trim()
+                                sb.delete(0, newlineIndex + 1)
+                                if (line.isNotEmpty()) {
+                                    parseHardwareTelemetryResponse(line)
+                                }
+                                newlineIndex = sb.indexOf("\r")
+                                if (newlineIndex < 0) newlineIndex = sb.indexOf("\n")
                             }
                         }
                     }
@@ -545,7 +624,19 @@ class MotorHandler {
                         val command = "!DUTY ${config.phidgetChannel} ${String.format("%.2f", dutyCycle)}\r"
                         val bytes = command.toByteArray(Charsets.US_ASCII)
                         if (endpointOut != null) {
-                            conn.bulkTransfer(endpointOut, bytes, bytes.size, 200)
+                            if (endpointOut.type == UsbConstants.USB_ENDPOINT_XFER_BULK) {
+                                conn.bulkTransfer(endpointOut, bytes, 0, bytes.size, 200)
+                            } else if (endpointOut.type == UsbConstants.USB_ENDPOINT_XFER_INT) {
+                                val outRequest = UsbRequest()
+                                outRequest.initialize(conn, endpointOut)
+                                val outBuf = ByteBuffer.wrap(bytes)
+                                if (outRequest.queue(outBuf)) {
+                                    conn.requestWait(200)
+                                }
+                                outRequest.close()
+                            } else {
+                                conn.controlTransfer(0x21, 0x09, 0x0200, 0, bytes, bytes.size, 200)
+                            }
                         } else {
                             conn.controlTransfer(0x21, 0x09, 0x0200, 0, bytes, bytes.size, 200)
                         }
