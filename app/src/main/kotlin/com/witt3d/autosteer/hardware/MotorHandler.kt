@@ -36,6 +36,8 @@ class MotorHandler {
     private var usbConnection: UsbDeviceConnection? = null
     private var usbInterface: UsbInterface? = null
 
+    private var phidgetDcMotor: com.phidget22.DCMotor? = null
+
     private var communicationJob: Job? = null
     private var simulationJob: Job? = null
     private var activityRef: java.lang.ref.WeakReference<android.app.Activity>? = null
@@ -295,6 +297,11 @@ class MotorHandler {
             return
         }
 
+        if (currentConfig.motorType == MotorType.PHIDGETS) {
+            connectPhidgetsMotor(motorDevice)
+            return
+        }
+
         // Direct Raw USB Host Connection for Phidgets / USB HID
         try {
             connectRawUsbDevice(usbManager, motorDevice)
@@ -528,6 +535,83 @@ class MotorHandler {
         }
     }
 
+    private fun connectPhidgetsMotor(device: UsbDevice) {
+        val currentConfig = _config.value
+        scope.launch(Dispatchers.IO) {
+            try {
+                val motor = com.phidget22.DCMotor()
+                phidgetDcMotor = motor
+
+                if (currentConfig.phidgetSerialNumber > 0) {
+                    motor.deviceSerialNumber = currentConfig.phidgetSerialNumber
+                }
+                motor.channel = currentConfig.phidgetChannel
+
+                motor.addAttachListener { e ->
+                    Log.d(TAG, "Phidget DCMotor Attached: ${e.source}")
+                    scope.launch(Dispatchers.IO) {
+                        try {
+                            if (currentConfig.phidgetAcceleration > 0) {
+                                motor.acceleration = currentConfig.phidgetAcceleration
+                            }
+                            if (currentConfig.phidgetCurrentLimit > 0) {
+                                motor.currentLimit = currentConfig.phidgetCurrentLimit
+                            }
+                        } catch (ex: Exception) {
+                            Log.w(TAG, "Could not set Phidget acceleration/currentLimit: ${ex.message}")
+                        }
+                    }
+                }
+
+                motor.addDetachListener { e ->
+                    Log.d(TAG, "Phidget DCMotor Detached: ${e.source}")
+                    _config.value = _config.value.copy(isConnected = false)
+                }
+
+                motor.addVelocityUpdateListener { e ->
+                    val actualPct = (e.velocity * 100.0).toFloat()
+                    _telemetry.value = _telemetry.value.copy(actualPowerPercent = actualPct)
+                }
+
+                motor.open(5000)
+
+                _config.value = currentConfig.copy(
+                    isConnected = true,
+                    usbDeviceDetected = true,
+                    usbDeviceName = "Phidget Motor Controller 1065_1B (${device.deviceName})",
+                    errorMessage = null
+                )
+
+                _telemetry.value = _telemetry.value.copy(
+                    isConnected = true,
+                    statusMessage = "Connected via Phidget22 API"
+                )
+
+                Log.d(TAG, "Successfully connected to Phidget DCMotor via Phidget22 API")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error connecting Phidgets DCMotor via Phidget22 API", e)
+                safelyClosePhidgets()
+                _config.value = currentConfig.copy(
+                    isConnected = false,
+                    errorMessage = "Phidget22 Error: ${e.message}"
+                )
+            }
+        }
+    }
+
+    private fun safelyClosePhidgets() {
+        val m = phidgetDcMotor
+        phidgetDcMotor = null
+        if (m != null) {
+            try {
+                m.targetVelocity = 0.0
+                m.close()
+            } catch (e: Exception) {
+                Log.w(TAG, "Error closing Phidget DCMotor: ${e.message}")
+            }
+        }
+    }
+
     fun disconnect() {
         runBlocking {
             communicationJob?.cancelAndJoin()
@@ -536,6 +620,8 @@ class MotorHandler {
         simulationJob?.cancel()
         simulationJob = null
         isPermissionPending = false
+
+        safelyClosePhidgets()
 
         try {
             usbPort?.close()
