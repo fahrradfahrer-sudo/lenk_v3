@@ -75,7 +75,7 @@ class ImuHandler {
                 addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                context.applicationContext.registerReceiver(usbReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+                context.applicationContext.registerReceiver(usbReceiver, filter, Context.RECEIVER_EXPORTED)
             } else {
                 context.applicationContext.registerReceiver(usbReceiver, filter)
             }
@@ -181,7 +181,11 @@ class ImuHandler {
                 override fun onReceive(c: Context?, intent: Intent?) {
                     if (ACTION_USB_PERMISSION == intent?.action) {
                         synchronized(this) {
-                            c?.unregisterReceiver(this)
+                            try {
+                                c?.unregisterReceiver(this)
+                            } catch (e: Exception) {
+                                Log.w(TAG, "Unregistering IMU permission receiver failed: ${e.message}")
+                            }
                             isPermissionPending = false
                             val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
                             Log.d(TAG, "USB Permission callback result: $granted")
@@ -199,7 +203,7 @@ class ImuHandler {
             }
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+                context.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
             } else {
                 context.registerReceiver(receiver, filter)
             }
@@ -429,6 +433,13 @@ class ImuHandler {
                         _config.value = currentConfig.copy(isConnected = true, errorMessage = null)
                         Log.d(TAG, "Successfully connected to IMU Brick v2 via Native USB Bulk Transfer")
                         return@launch
+                    }
+                    if (_config.value.usbDeviceDetected && !_config.value.isConnected) {
+                        Log.d(TAG, "USB IMU device detected. Waiting for USB permission grant or USB direct connection.")
+                        if (attempt < maxAttempts) {
+                            delay(2000L)
+                            continue
+                        }
                     }
                 }
 

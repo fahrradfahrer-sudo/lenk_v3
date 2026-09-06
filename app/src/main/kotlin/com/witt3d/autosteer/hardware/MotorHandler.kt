@@ -74,7 +74,7 @@ class MotorHandler {
                 addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                context.applicationContext.registerReceiver(usbReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+                context.applicationContext.registerReceiver(usbReceiver, filter, Context.RECEIVER_EXPORTED)
             } else {
                 context.applicationContext.registerReceiver(usbReceiver, filter)
             }
@@ -128,7 +128,8 @@ class MotorHandler {
 
         if (availableDrivers.isNotEmpty()) {
             val device = availableDrivers[0].device
-            if (usbManager.hasPermission(device)) {
+            val hasPerm = usbManager.hasPermission(device)
+            if (hasPerm) {
                 isPermissionPending = false
             }
             val devName = when (device.vendorId) {
@@ -140,6 +141,9 @@ class MotorHandler {
                 usbDeviceDetected = true,
                 usbDeviceName = devName
             )
+            if (!hasPerm && !isPermissionPending) {
+                requestUsbPermission(context, usbManager, device)
+            }
             return
         }
 
@@ -147,7 +151,8 @@ class MotorHandler {
         val matchedDevice = rawDevices.firstOrNull { isMotorDevice(it, currentType) }
 
         if (matchedDevice != null) {
-            if (usbManager.hasPermission(matchedDevice)) {
+            val hasPerm = usbManager.hasPermission(matchedDevice)
+            if (hasPerm) {
                 isPermissionPending = false
             }
             val devName = when (matchedDevice.vendorId) {
@@ -159,6 +164,9 @@ class MotorHandler {
                 usbDeviceDetected = true,
                 usbDeviceName = devName
             )
+            if (!hasPerm && !isPermissionPending) {
+                requestUsbPermission(context, usbManager, matchedDevice)
+            }
         } else {
             _config.value = _config.value.copy(
                 usbDeviceDetected = false,
@@ -442,7 +450,11 @@ class MotorHandler {
                 override fun onReceive(c: Context?, intent: Intent?) {
                     if (ACTION_USB_PERMISSION == intent?.action) {
                         synchronized(this) {
-                            c?.unregisterReceiver(this)
+                            try {
+                                c?.unregisterReceiver(this)
+                            } catch (e: Exception) {
+                                Log.w(TAG, "Unregistering motor permission receiver failed: ${e.message}")
+                            }
                             isPermissionPending = false
                             val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
                             Log.d(TAG, "Motor USB Permission callback result: $granted")
@@ -461,7 +473,7 @@ class MotorHandler {
             }
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+                context.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
             } else {
                 context.registerReceiver(receiver, filter)
             }

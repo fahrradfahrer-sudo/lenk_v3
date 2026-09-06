@@ -1,10 +1,13 @@
 package com.witt3d.autosteer.hardware.gps
 
 import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
+import android.os.Build
 import android.util.Log
 import com.hoho.android.usbserial.driver.UsbSerialPort
 import com.hoho.android.usbserial.driver.UsbSerialProber
@@ -19,6 +22,7 @@ import java.io.IOException
 
 class GpsHandler {
     private val TAG = "GpsHandler"
+    private val ACTION_USB_PERMISSION = "com.witt3d.autosteer.USB_PERMISSION"
 
     private val _config = MutableStateFlow(GpsConfig())
     val config: StateFlow<GpsConfig> = _config.asStateFlow()
@@ -33,7 +37,50 @@ class GpsHandler {
     private var usbPort: UsbSerialPort? = null
     private var connectionJob: Job? = null
     private var simulationJob: Job? = null
+    private var lastContext: Context? = null
+    private var isUsbReceiverRegistered = false
+    private var isPermissionPending = false
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+    private val usbReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            val action = intent?.action
+            if (UsbManager.ACTION_USB_DEVICE_ATTACHED == action) {
+                Log.d(TAG, "GPS USB Device Attached broadcast received")
+                connect(context)
+            } else if (UsbManager.ACTION_USB_DEVICE_DETACHED == action) {
+                Log.d(TAG, "GPS USB Device Detached broadcast received")
+                val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+                }
+                if (device != null && isGpsDevice(device)) {
+                    disconnect()
+                }
+            }
+        }
+    }
+
+    private fun registerUsbReceiver(context: Context) {
+        if (isUsbReceiverRegistered) return
+        try {
+            val filter = IntentFilter().apply {
+                addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
+                addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.applicationContext.registerReceiver(usbReceiver, filter, Context.RECEIVER_EXPORTED)
+            } else {
+                context.applicationContext.registerReceiver(usbReceiver, filter)
+            }
+            isUsbReceiverRegistered = true
+            Log.d(TAG, "Registered GPS USB Attached/Detached BroadcastReceiver")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to register GPS USB BroadcastReceiver: ${e.message}")
+        }
+    }
 
     fun updateConfig(newConfig: GpsConfig) {
         _config.value = newConfig
@@ -50,26 +97,41 @@ class GpsHandler {
     }
 
     fun scanUsbDevices(context: Context) {
+        lastContext = context
         val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
         val availableDrivers = UsbSerialProber.getDefaultProber().findAllDrivers(usbManager)
         val gpsDrivers = availableDrivers.filter { isGpsDevice(it.device) }
 
         if (gpsDrivers.isNotEmpty()) {
             val device = gpsDrivers[0].device
+            val hasPerm = usbManager.hasPermission(device)
+            if (hasPerm) {
+                isPermissionPending = false
+            }
             val devName = "${device.manufacturerName ?: "u-blox"} (${device.productName ?: "GPS Receiver"})"
             _config.value = _config.value.copy(
                 usbDeviceDetected = true,
                 usbDeviceName = devName
             )
+            if (!hasPerm && !isPermissionPending) {
+                requestUsbPermission(context, usbManager, device)
+            }
         } else {
             val rawDevices = usbManager.deviceList.values
             val matchedDevice = rawDevices.firstOrNull { isGpsDevice(it) }
             if (matchedDevice != null) {
+                val hasPerm = usbManager.hasPermission(matchedDevice)
+                if (hasPerm) {
+                    isPermissionPending = false
+                }
                 val devName = "${matchedDevice.manufacturerName ?: "u-blox"} (${matchedDevice.productName ?: "GPS Receiver"})"
                 _config.value = _config.value.copy(
                     usbDeviceDetected = true,
                     usbDeviceName = devName
                 )
+                if (!hasPerm && !isPermissionPending) {
+                    requestUsbPermission(context, usbManager, matchedDevice)
+                }
             } else {
                 _config.value = _config.value.copy(
                     usbDeviceDetected = false,
@@ -79,8 +141,77 @@ class GpsHandler {
         }
     }
 
+    private fun requestUsbPermission(context: Context, usbManager: UsbManager, device: UsbDevice) {
+        if (isPermissionPending) {
+            Log.d(TAG, "GPS USB Permission request already pending for device: ${device.deviceName}")
+            return
+        }
+        isPermissionPending = true
+        try {
+            val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            } else {
+                PendingIntent.FLAG_UPDATE_CURRENT
+            }
+
+            val intent = Intent(ACTION_USB_PERMISSION).apply {
+                setPackage(context.packageName)
+            }
+            val permissionIntent = PendingIntent.getBroadcast(context, 0, intent, flags)
+
+            val filter = IntentFilter(ACTION_USB_PERMISSION)
+            val receiver = object : BroadcastReceiver() {
+                override fun onReceive(c: Context?, intent: Intent?) {
+                    if (ACTION_USB_PERMISSION == intent?.action) {
+                        synchronized(this) {
+                            try {
+                                c?.unregisterReceiver(this)
+                            } catch (e: Exception) {
+                                Log.w(TAG, "Unregistering GPS permission receiver failed: ${e.message}")
+                            }
+                            isPermissionPending = false
+                            val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
+                            Log.d(TAG, "GPS USB Permission callback result: $granted")
+                            if (granted) {
+                                scanUsbDevices(context)
+                                connect(context)
+                            } else {
+                                _config.value = _config.value.copy(
+                                    isConnected = false,
+                                    errorMessage = "USB permission denied by user."
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
+            } else {
+                context.registerReceiver(receiver, filter)
+            }
+
+            usbManager.requestPermission(device, permissionIntent)
+            _config.value = _config.value.copy(
+                isConnected = false,
+                errorMessage = "Requesting USB permissions..."
+            )
+            Log.d(TAG, "Requested GPS USB Permission for device: ${device.deviceName}")
+        } catch (e: Exception) {
+            isPermissionPending = false
+            Log.e(TAG, "Error requesting GPS USB permission", e)
+        }
+    }
+
     fun connect(context: Context? = null) {
         disconnect()
+
+        if (context != null) {
+            lastContext = context.applicationContext
+            registerUsbReceiver(context.applicationContext)
+        }
+        val activeContext = context ?: lastContext
 
         val currentConfig = _config.value
         if (currentConfig.isSimulationMode) {
@@ -88,7 +219,7 @@ class GpsHandler {
             return
         }
 
-        if (context == null) {
+        if (activeContext == null) {
             _config.value = currentConfig.copy(
                 isConnected = false,
                 errorMessage = "Context required for USB connection"
@@ -96,7 +227,7 @@ class GpsHandler {
             return
         }
 
-        val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
+        val usbManager = activeContext.getSystemService(Context.USB_SERVICE) as UsbManager
         val availableDrivers = UsbSerialProber.getDefaultProber().findAllDrivers(usbManager)
         val gpsDrivers = availableDrivers.filter { isGpsDevice(it.device) }
 
@@ -112,16 +243,7 @@ class GpsHandler {
         val device: UsbDevice = driver.device
 
         if (!usbManager.hasPermission(device)) {
-            val intent = Intent("com.witt3d.autosteer.USB_PERMISSION").apply {
-                setPackage(context.packageName)
-            }
-            val flags = PendingIntent.FLAG_IMMUTABLE
-            val permissionIntent = PendingIntent.getBroadcast(context, 0, intent, flags)
-            usbManager.requestPermission(device, permissionIntent)
-            _config.value = currentConfig.copy(
-                isConnected = false,
-                errorMessage = "Requesting USB permissions..."
-            )
+            requestUsbPermission(activeContext, usbManager, device)
             return
         }
 
@@ -189,6 +311,7 @@ class GpsHandler {
         connectionJob = null
         simulationJob?.cancel()
         simulationJob = null
+        isPermissionPending = false
 
         try {
             usbPort?.close()
