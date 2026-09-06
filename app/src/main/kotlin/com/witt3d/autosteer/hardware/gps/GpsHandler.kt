@@ -41,6 +41,7 @@ class GpsHandler {
     private var lastContext: Context? = null
     private var isUsbReceiverRegistered = false
     private var isPermissionPending = false
+    private var permissionReceiver: BroadcastReceiver? = null
 
     private fun findActivity(context: Context?): android.app.Activity? {
         var ctx = context
@@ -122,8 +123,6 @@ class GpsHandler {
             val hasPerm = usbManager.hasPermission(device)
             if (hasPerm) {
                 isPermissionPending = false
-            } else if (act != null) {
-                isPermissionPending = false
             }
             val devName = "${device.manufacturerName ?: "u-blox"} (${device.productName ?: "GPS Receiver"})"
             _config.value = _config.value.copy(
@@ -140,8 +139,6 @@ class GpsHandler {
                 val hasPerm = usbManager.hasPermission(matchedDevice)
                 if (hasPerm) {
                     isPermissionPending = false
-                } else if (act != null) {
-                    isPermissionPending = false
                 }
                 val devName = "${matchedDevice.manufacturerName ?: "u-blox"} (${matchedDevice.productName ?: "GPS Receiver"})"
                 _config.value = _config.value.copy(
@@ -152,6 +149,7 @@ class GpsHandler {
                     requestUsbPermission(context, usbManager, matchedDevice)
                 }
             } else {
+                isPermissionPending = false
                 _config.value = _config.value.copy(
                     usbDeviceDetected = false,
                     usbDeviceName = null
@@ -174,6 +172,12 @@ class GpsHandler {
             return
         }
         isPermissionPending = true
+
+        permissionReceiver?.let { oldRx ->
+            try { activityContext.unregisterReceiver(oldRx) } catch (ignored: Exception) {}
+            permissionReceiver = null
+        }
+
         try {
             val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
@@ -196,6 +200,7 @@ class GpsHandler {
                             } catch (e: Exception) {
                                 Log.w(TAG, "Unregistering GPS permission receiver failed: ${e.message}")
                             }
+                            permissionReceiver = null
                             isPermissionPending = false
                             val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
                             Log.d(TAG, "GPS USB Permission callback result: $granted")
@@ -212,6 +217,7 @@ class GpsHandler {
                     }
                 }
             }
+            permissionReceiver = receiver
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 activityContext.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
@@ -227,6 +233,7 @@ class GpsHandler {
             Log.d(TAG, "Requested GPS USB Permission for device: ${device.deviceName}")
         } catch (e: Exception) {
             isPermissionPending = false
+            permissionReceiver = null
             Log.e(TAG, "Error requesting GPS USB permission", e)
         }
     }

@@ -42,6 +42,7 @@ class MotorHandler {
     private var lastContext: Context? = null
     private var isUsbReceiverRegistered = false
     private var isPermissionPending = false
+    private var permissionReceiver: BroadcastReceiver? = null
 
     private fun findActivity(context: Context?): android.app.Activity? {
         var ctx = context
@@ -146,8 +147,6 @@ class MotorHandler {
             val hasPerm = usbManager.hasPermission(device)
             if (hasPerm) {
                 isPermissionPending = false
-            } else if (act != null) {
-                isPermissionPending = false
             }
             val devName = when (device.vendorId) {
                 0x06C2 -> "Phidget Motor Controller 1065_1B (${device.manufacturerName ?: "Phidgets"} - ${device.deviceName})"
@@ -171,8 +170,6 @@ class MotorHandler {
             val hasPerm = usbManager.hasPermission(matchedDevice)
             if (hasPerm) {
                 isPermissionPending = false
-            } else if (act != null) {
-                isPermissionPending = false
             }
             val devName = when (matchedDevice.vendorId) {
                 0x06C2 -> "Phidget Motor Controller 1065_1B (${matchedDevice.manufacturerName ?: "Phidgets"} - ${matchedDevice.deviceName})"
@@ -187,6 +184,7 @@ class MotorHandler {
                 requestUsbPermission(context, usbManager, matchedDevice)
             }
         } else {
+            isPermissionPending = false
             _config.value = _config.value.copy(
                 usbDeviceDetected = false,
                 usbDeviceName = null
@@ -365,7 +363,7 @@ class MotorHandler {
             val readBuffer = ByteArray(256)
             val sb = StringBuilder()
 
-            while (isActive) {
+            while (isActive && usbConnection == connection) {
                 try {
                     // Periodically send query commands for Phidgets over USB OUT endpoint if present
                     if (endpointOut != null && _config.value.motorType == MotorType.PHIDGETS) {
@@ -376,19 +374,21 @@ class MotorHandler {
                                 connection.bulkTransfer(endpointOut, queryBytes, 0, queryBytes.size, 200)
                             } else if (endpointOut.type == UsbConstants.USB_ENDPOINT_XFER_INT) {
                                 val outRequest = UsbRequest()
-                                outRequest.initialize(connection, endpointOut)
-                                val outBuf = ByteBuffer.wrap(queryBytes)
-                                if (outRequest.queue(outBuf)) {
-                                    connection.requestWait(200)
+                                val initialized = try { outRequest.initialize(connection, endpointOut) } catch (e: Exception) { false }
+                                if (initialized) {
+                                    val outBuf = ByteBuffer.wrap(queryBytes)
+                                    if (outRequest.queue(outBuf)) {
+                                        connection.requestWait(200)
+                                    }
+                                    outRequest.close()
                                 }
-                                outRequest.close()
                             }
                         } catch (e: Exception) {
                             Log.w(TAG, "Failed sending query to USB OUT endpoint: ${e.message}")
                         }
                     }
 
-                    if (endpointIn != null) {
+                    if (endpointIn != null && isActive && usbConnection == connection) {
                         var len = -1
                         if (endpointIn.type == UsbConstants.USB_ENDPOINT_XFER_BULK) {
                             len = try {
@@ -400,19 +400,21 @@ class MotorHandler {
                         } else if (endpointIn.type == UsbConstants.USB_ENDPOINT_XFER_INT) {
                             try {
                                 val inRequest = UsbRequest()
-                                inRequest.initialize(connection, endpointIn)
-                                val inBuf = ByteBuffer.allocate(readBuffer.size)
-                                if (inRequest.queue(inBuf)) {
-                                    val req = connection.requestWait(100)
-                                    if (req == inRequest) {
-                                        inBuf.flip()
-                                        len = inBuf.remaining()
-                                        if (len > 0) {
-                                            inBuf.get(readBuffer, 0, len)
+                                val initialized = try { inRequest.initialize(connection, endpointIn) } catch (e: Exception) { false }
+                                if (initialized) {
+                                    val inBuf = ByteBuffer.allocate(readBuffer.size)
+                                    if (inRequest.queue(inBuf)) {
+                                        val req = connection.requestWait(100)
+                                        if (req == inRequest) {
+                                            inBuf.flip()
+                                            len = inBuf.remaining()
+                                            if (len > 0) {
+                                                inBuf.get(readBuffer, 0, len)
+                                            }
                                         }
                                     }
+                                    inRequest.close()
                                 }
-                                inRequest.close()
                             } catch (e: Exception) {
                                 Log.w(TAG, "UsbRequest error on USB INT IN endpoint: ${e.message}")
                                 len = -1
@@ -460,6 +462,12 @@ class MotorHandler {
             return
         }
         isPermissionPending = true
+
+        permissionReceiver?.let { oldRx ->
+            try { activityContext.unregisterReceiver(oldRx) } catch (ignored: Exception) {}
+            permissionReceiver = null
+        }
+
         try {
             val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
@@ -482,6 +490,7 @@ class MotorHandler {
                             } catch (e: Exception) {
                                 Log.w(TAG, "Unregistering motor permission receiver failed: ${e.message}")
                             }
+                            permissionReceiver = null
                             isPermissionPending = false
                             val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
                             Log.d(TAG, "Motor USB Permission callback result: $granted")
@@ -498,6 +507,7 @@ class MotorHandler {
                     }
                 }
             }
+            permissionReceiver = receiver
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 activityContext.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
@@ -513,12 +523,15 @@ class MotorHandler {
             Log.d(TAG, "Requested USB Permission for motor device: ${device.deviceName}")
         } catch (e: Exception) {
             isPermissionPending = false
+            permissionReceiver = null
             Log.e(TAG, "Error requesting USB permission for motor device", e)
         }
     }
 
     fun disconnect() {
-        communicationJob?.cancel()
+        runBlocking {
+            communicationJob?.cancelAndJoin()
+        }
         communicationJob = null
         simulationJob?.cancel()
         simulationJob = null

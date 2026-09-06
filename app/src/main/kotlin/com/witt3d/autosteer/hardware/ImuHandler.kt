@@ -44,6 +44,7 @@ class ImuHandler {
     private var appContext: Context? = null
     private var isUsbReceiverRegistered = false
     private var isPermissionPending = false
+    private var permissionReceiver: BroadcastReceiver? = null
 
     private fun findActivity(context: Context?): android.app.Activity? {
         var ctx = context
@@ -152,9 +153,6 @@ class ImuHandler {
             val hasPerm = usbManager.hasPermission(firstDevice)
             if (hasPerm) {
                 isPermissionPending = false
-            } else if (act != null) {
-                // If user manually triggered scan or we have an activity context, allow re-requesting permission
-                isPermissionPending = false
             }
             val devName = "${firstDevice.manufacturerName ?: "Tinkerforge"} (${firstDevice.productName ?: "IMU Brick 2.0"})"
             _config.value = _config.value.copy(
@@ -167,6 +165,7 @@ class ImuHandler {
                 requestUsbPermission(context, usbManager, firstDevice)
             }
         } else {
+            isPermissionPending = false
             _config.value = _config.value.copy(
                 usbDeviceDetected = false,
                 usbDeviceName = null
@@ -190,6 +189,12 @@ class ImuHandler {
             return
         }
         isPermissionPending = true
+
+        permissionReceiver?.let { oldRx ->
+            try { activityContext.unregisterReceiver(oldRx) } catch (ignored: Exception) {}
+            permissionReceiver = null
+        }
+
         try {
             val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
@@ -212,6 +217,7 @@ class ImuHandler {
                             } catch (e: Exception) {
                                 Log.w(TAG, "Unregistering IMU permission receiver failed: ${e.message}")
                             }
+                            permissionReceiver = null
                             isPermissionPending = false
                             val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
                             Log.d(TAG, "USB Permission callback result: $granted")
@@ -227,6 +233,7 @@ class ImuHandler {
                     }
                 }
             }
+            permissionReceiver = receiver
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 activityContext.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
@@ -238,6 +245,7 @@ class ImuHandler {
             Log.d(TAG, "Requested USB Permission for device: ${device.deviceName}")
         } catch (e: Exception) {
             isPermissionPending = false
+            permissionReceiver = null
             Log.e(TAG, "Error requesting USB permission", e)
         }
     }
