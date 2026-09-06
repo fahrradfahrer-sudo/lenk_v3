@@ -29,6 +29,7 @@ class MainActivity : ComponentActivity() {
         )
 
         startHardwareService()
+        scanAndConnectHardware()
 
         setContent {
             MaterialTheme {
@@ -39,6 +40,19 @@ class MainActivity : ComponentActivity() {
                     MainNavigation()
                 }
             }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        scanAndConnectHardware()
+    }
+
+    private fun scanAndConnectHardware() {
+        try {
+            com.witt3d.autosteer.data.repository.HardwareRepository.scanAndConnectAll(this)
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Failed to scan and connect hardware", e)
         }
     }
 

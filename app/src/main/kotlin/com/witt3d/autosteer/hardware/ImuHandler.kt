@@ -75,7 +75,7 @@ class ImuHandler {
                 addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                context.applicationContext.registerReceiver(usbReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+                context.applicationContext.registerReceiver(usbReceiver, filter, Context.RECEIVER_EXPORTED)
             } else {
                 context.applicationContext.registerReceiver(usbReceiver, filter)
             }
@@ -120,7 +120,9 @@ class ImuHandler {
      * Scans for attached USB devices and requests USB permission if needed.
      */
     fun scanUsbDevices(context: Context): List<UsbDevice> {
-        this.appContext = context.applicationContext
+        if (context is android.app.Activity || appContext == null) {
+            this.appContext = context
+        }
         val usbManager = context.getSystemService(Context.USB_SERVICE) as? UsbManager ?: return emptyList()
         val deviceList = usbManager.deviceList
         val tinkerforgeDevices = mutableListOf<UsbDevice>()
@@ -146,7 +148,7 @@ class ImuHandler {
             Log.d(TAG, "Detected USB IMU Device: $devName, Has Permission: $hasPerm")
 
             if (!hasPerm && !isPermissionPending) {
-                requestUsbPermission(context, usbManager, firstDevice)
+                requestUsbPermission(appContext ?: context, usbManager, firstDevice)
             }
         } else {
             _config.value = _config.value.copy(
@@ -163,6 +165,11 @@ class ImuHandler {
             Log.d(TAG, "USB Permission request already pending for device: ${device.deviceName}")
             return
         }
+        val activityContext = (context as? android.app.Activity) ?: (appContext as? android.app.Activity)
+        if (activityContext == null) {
+            Log.d(TAG, "Cannot request USB permission without Activity context for device: ${device.deviceName}")
+            return
+        }
         isPermissionPending = true
         try {
             val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -172,22 +179,26 @@ class ImuHandler {
             }
 
             val intent = Intent(ACTION_USB_PERMISSION).apply {
-                setPackage(context.packageName)
+                setPackage(activityContext.packageName)
             }
-            val permissionIntent = PendingIntent.getBroadcast(context, 0, intent, flags)
+            val permissionIntent = PendingIntent.getBroadcast(activityContext, 0, intent, flags)
 
             val filter = IntentFilter(ACTION_USB_PERMISSION)
             val receiver = object : BroadcastReceiver() {
                 override fun onReceive(c: Context?, intent: Intent?) {
                     if (ACTION_USB_PERMISSION == intent?.action) {
                         synchronized(this) {
-                            c?.unregisterReceiver(this)
+                            try {
+                                c?.unregisterReceiver(this)
+                            } catch (e: Exception) {
+                                Log.w(TAG, "Unregistering IMU permission receiver failed: ${e.message}")
+                            }
                             isPermissionPending = false
                             val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
                             Log.d(TAG, "USB Permission callback result: $granted")
                             if (granted) {
-                                scanUsbDevices(context)
-                                connect(context)
+                                scanUsbDevices(activityContext)
+                                connect(activityContext)
                             } else {
                                 _config.value = _config.value.copy(
                                     errorMessage = "USB permission was denied by user."
@@ -199,9 +210,9 @@ class ImuHandler {
             }
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+                activityContext.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
             } else {
-                context.registerReceiver(receiver, filter)
+                activityContext.registerReceiver(receiver, filter)
             }
 
             usbManager.requestPermission(device, permissionIntent)
@@ -429,6 +440,23 @@ class ImuHandler {
                         _config.value = currentConfig.copy(isConnected = true, errorMessage = null)
                         Log.d(TAG, "Successfully connected to IMU Brick v2 via Native USB Bulk Transfer")
                         return@launch
+                    }
+                    if (_config.value.usbDeviceDetected && !_config.value.isConnected) {
+                        Log.d(TAG, "USB IMU device detected. Waiting for USB permission grant or USB direct connection.")
+                        if (attempt < maxAttempts) {
+                            delay(2000L)
+                            continue
+                        }
+                    } else {
+                        Log.d(TAG, "Local host 127.0.0.1 selected but no direct USB connection established.")
+                        _config.value = currentConfig.copy(
+                            isConnected = false,
+                            errorMessage = "No local USB IMU connected or permission pending."
+                        )
+                        if (attempt < maxAttempts) {
+                            delay(2000L)
+                            continue
+                        }
                     }
                 }
 
