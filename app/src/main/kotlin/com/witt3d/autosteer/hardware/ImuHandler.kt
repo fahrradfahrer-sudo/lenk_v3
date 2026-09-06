@@ -24,7 +24,7 @@ import java.nio.ByteOrder
 
 class ImuHandler {
     private val TAG = "ImuHandler"
-    private val ACTION_USB_PERMISSION = "com.witt3d.autosteer.USB_PERMISSION"
+    private val ACTION_USB_PERMISSION = "com.witt3d.autosteer.IMU_USB_PERMISSION"
 
     private var ipcon: IPConnection? = null
     private var imu: BrickIMUV2? = null
@@ -40,9 +40,19 @@ class ImuHandler {
     private var retryJob: Job? = null
     private var usbConnection: UsbDeviceConnection? = null
     private var usbInterface: UsbInterface? = null
+    private var activityRef: java.lang.ref.WeakReference<android.app.Activity>? = null
     private var appContext: Context? = null
     private var isUsbReceiverRegistered = false
     private var isPermissionPending = false
+
+    private fun findActivity(context: Context?): android.app.Activity? {
+        var ctx = context
+        while (ctx is android.content.ContextWrapper) {
+            if (ctx is android.app.Activity) return ctx
+            ctx = ctx.baseContext
+        }
+        return null
+    }
 
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
@@ -120,9 +130,12 @@ class ImuHandler {
      * Scans for attached USB devices and requests USB permission if needed.
      */
     fun scanUsbDevices(context: Context): List<UsbDevice> {
-        if (context is android.app.Activity || appContext == null) {
-            this.appContext = context
+        val act = findActivity(context)
+        if (act != null) {
+            this.activityRef = java.lang.ref.WeakReference(act)
         }
+        this.appContext = context.applicationContext
+
         val usbManager = context.getSystemService(Context.USB_SERVICE) as? UsbManager ?: return emptyList()
         val deviceList = usbManager.deviceList
         val tinkerforgeDevices = mutableListOf<UsbDevice>()
@@ -139,6 +152,9 @@ class ImuHandler {
             val hasPerm = usbManager.hasPermission(firstDevice)
             if (hasPerm) {
                 isPermissionPending = false
+            } else if (act != null) {
+                // If user manually triggered scan or we have an activity context, allow re-requesting permission
+                isPermissionPending = false
             }
             val devName = "${firstDevice.manufacturerName ?: "Tinkerforge"} (${firstDevice.productName ?: "IMU Brick 2.0"})"
             _config.value = _config.value.copy(
@@ -148,7 +164,7 @@ class ImuHandler {
             Log.d(TAG, "Detected USB IMU Device: $devName, Has Permission: $hasPerm")
 
             if (!hasPerm && !isPermissionPending) {
-                requestUsbPermission(appContext ?: context, usbManager, firstDevice)
+                requestUsbPermission(context, usbManager, firstDevice)
             }
         } else {
             _config.value = _config.value.copy(
@@ -165,9 +181,12 @@ class ImuHandler {
             Log.d(TAG, "USB Permission request already pending for device: ${device.deviceName}")
             return
         }
-        val activityContext = (context as? android.app.Activity) ?: (appContext as? android.app.Activity)
+        val activityContext = findActivity(context) ?: findActivity(appContext) ?: activityRef?.get()
         if (activityContext == null) {
             Log.d(TAG, "Cannot request USB permission without Activity context for device: ${device.deviceName}")
+            _config.value = _config.value.copy(
+                errorMessage = "Activity context required to request USB permission for ${device.productName ?: device.deviceName}"
+            )
             return
         }
         isPermissionPending = true
@@ -181,7 +200,7 @@ class ImuHandler {
             val intent = Intent(ACTION_USB_PERMISSION).apply {
                 setPackage(activityContext.packageName)
             }
-            val permissionIntent = PendingIntent.getBroadcast(activityContext, 0, intent, flags)
+            val permissionIntent = PendingIntent.getBroadcast(activityContext, 1001, intent, flags)
 
             val filter = IntentFilter(ACTION_USB_PERMISSION)
             val receiver = object : BroadcastReceiver() {
@@ -407,6 +426,10 @@ class ImuHandler {
 
     fun connect(context: Context? = null) {
         if (context != null) {
+            val act = findActivity(context)
+            if (act != null) {
+                this.activityRef = java.lang.ref.WeakReference(act)
+            }
             appContext = context.applicationContext
             registerUsbReceiver(context.applicationContext)
         }

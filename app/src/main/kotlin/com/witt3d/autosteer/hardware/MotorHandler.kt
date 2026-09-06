@@ -24,7 +24,7 @@ import kotlin.math.roundToInt
 
 class MotorHandler {
     private val TAG = "MotorHandler"
-    private val ACTION_USB_PERMISSION = "com.witt3d.autosteer.USB_PERMISSION"
+    private val ACTION_USB_PERMISSION = "com.witt3d.autosteer.MOTOR_USB_PERMISSION"
 
     private val _config = MutableStateFlow(MotorConfig())
     val config: StateFlow<MotorConfig> = _config.asStateFlow()
@@ -38,9 +38,19 @@ class MotorHandler {
 
     private var communicationJob: Job? = null
     private var simulationJob: Job? = null
+    private var activityRef: java.lang.ref.WeakReference<android.app.Activity>? = null
     private var lastContext: Context? = null
     private var isUsbReceiverRegistered = false
     private var isPermissionPending = false
+
+    private fun findActivity(context: Context?): android.app.Activity? {
+        var ctx = context
+        while (ctx is android.content.ContextWrapper) {
+            if (ctx is android.app.Activity) return ctx
+            ctx = ctx.baseContext
+        }
+        return null
+    }
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     private var currentTargetPowerPercent: Float = 0f
@@ -120,9 +130,12 @@ class MotorHandler {
     }
 
     fun scanUsbDevices(context: Context) {
-        if (context is android.app.Activity || lastContext == null) {
-            lastContext = context
+        val act = findActivity(context)
+        if (act != null) {
+            this.activityRef = java.lang.ref.WeakReference(act)
         }
+        this.lastContext = context.applicationContext
+
         val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
         val currentType = _config.value.motorType
         val prober = getCustomMotorProber()
@@ -132,6 +145,8 @@ class MotorHandler {
             val device = availableDrivers[0].device
             val hasPerm = usbManager.hasPermission(device)
             if (hasPerm) {
+                isPermissionPending = false
+            } else if (act != null) {
                 isPermissionPending = false
             }
             val devName = when (device.vendorId) {
@@ -144,7 +159,7 @@ class MotorHandler {
                 usbDeviceName = devName
             )
             if (!hasPerm && !isPermissionPending) {
-                requestUsbPermission(lastContext ?: context, usbManager, device)
+                requestUsbPermission(context, usbManager, device)
             }
             return
         }
@@ -155,6 +170,8 @@ class MotorHandler {
         if (matchedDevice != null) {
             val hasPerm = usbManager.hasPermission(matchedDevice)
             if (hasPerm) {
+                isPermissionPending = false
+            } else if (act != null) {
                 isPermissionPending = false
             }
             val devName = when (matchedDevice.vendorId) {
@@ -167,7 +184,7 @@ class MotorHandler {
                 usbDeviceName = devName
             )
             if (!hasPerm && !isPermissionPending) {
-                requestUsbPermission(lastContext ?: context, usbManager, matchedDevice)
+                requestUsbPermission(context, usbManager, matchedDevice)
             }
         } else {
             _config.value = _config.value.copy(
@@ -434,9 +451,12 @@ class MotorHandler {
             Log.d(TAG, "USB Permission request already pending for device: ${device.deviceName}")
             return
         }
-        val activityContext = (context as? android.app.Activity) ?: (lastContext as? android.app.Activity)
+        val activityContext = findActivity(context) ?: findActivity(lastContext) ?: activityRef?.get()
         if (activityContext == null) {
             Log.d(TAG, "Cannot request USB permission without Activity context for device: ${device.deviceName}")
+            _config.value = _config.value.copy(
+                errorMessage = "Activity context required to request USB permission for ${device.productName ?: device.deviceName}"
+            )
             return
         }
         isPermissionPending = true
@@ -450,7 +470,7 @@ class MotorHandler {
             val intent = Intent(ACTION_USB_PERMISSION).apply {
                 setPackage(activityContext.packageName)
             }
-            val permissionIntent = PendingIntent.getBroadcast(activityContext, 0, intent, flags)
+            val permissionIntent = PendingIntent.getBroadcast(activityContext, 1003, intent, flags)
 
             val filter = IntentFilter(ACTION_USB_PERMISSION)
             val receiver = object : BroadcastReceiver() {
