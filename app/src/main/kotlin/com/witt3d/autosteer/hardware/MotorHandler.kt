@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.io.IOException
+import java.nio.ByteBuffer
 import kotlin.math.roundToInt
 
 class MotorHandler {
@@ -327,11 +328,9 @@ class MotorHandler {
 
             for (i in 0 until iface.endpointCount) {
                 val ep = iface.getEndpoint(i)
-                if (ep.direction == UsbConstants.USB_DIR_IN &&
-                    (ep.type == UsbConstants.USB_ENDPOINT_XFER_BULK || ep.type == UsbConstants.USB_ENDPOINT_XFER_INT)) {
+                if (ep.direction == UsbConstants.USB_DIR_IN) {
                     endpointIn = ep
-                } else if (ep.direction == UsbConstants.USB_DIR_OUT &&
-                    (ep.type == UsbConstants.USB_ENDPOINT_XFER_BULK || ep.type == UsbConstants.USB_ENDPOINT_XFER_INT)) {
+                } else if (ep.direction == UsbConstants.USB_DIR_OUT) {
                     endpointOut = ep
                 }
             }
@@ -346,18 +345,51 @@ class MotorHandler {
                         try {
                             val queryCmd = "?P\r?I\r?V\r"
                             val queryBytes = queryCmd.toByteArray(Charsets.US_ASCII)
-                            connection.bulkTransfer(endpointOut, queryBytes, 0, queryBytes.size, 200)
+                            if (endpointOut.type == UsbConstants.USB_ENDPOINT_XFER_BULK) {
+                                connection.bulkTransfer(endpointOut, queryBytes, 0, queryBytes.size, 200)
+                            } else if (endpointOut.type == UsbConstants.USB_ENDPOINT_XFER_INT) {
+                                val outRequest = UsbRequest()
+                                outRequest.initialize(connection, endpointOut)
+                                val outBuf = ByteBuffer.wrap(queryBytes)
+                                if (outRequest.queue(outBuf)) {
+                                    connection.requestWait(200)
+                                }
+                                outRequest.close()
+                            }
                         } catch (e: Exception) {
                             Log.w(TAG, "Failed sending query to USB OUT endpoint: ${e.message}")
                         }
                     }
 
                     if (endpointIn != null) {
-                        val len = try {
-                            connection.bulkTransfer(endpointIn, readBuffer, 0, readBuffer.size, 100)
-                        } catch (e: Exception) {
-                            Log.w(TAG, "Bulk transfer error on USB IN endpoint: ${e.message}")
-                            -1
+                        var len = -1
+                        if (endpointIn.type == UsbConstants.USB_ENDPOINT_XFER_BULK) {
+                            len = try {
+                                connection.bulkTransfer(endpointIn, readBuffer, 0, readBuffer.size, 100)
+                            } catch (e: Exception) {
+                                Log.w(TAG, "Bulk transfer error on USB IN endpoint: ${e.message}")
+                                -1
+                            }
+                        } else if (endpointIn.type == UsbConstants.USB_ENDPOINT_XFER_INT) {
+                            try {
+                                val inRequest = UsbRequest()
+                                inRequest.initialize(connection, endpointIn)
+                                val inBuf = ByteBuffer.allocate(readBuffer.size)
+                                if (inRequest.queue(inBuf)) {
+                                    val req = connection.requestWait(100)
+                                    if (req == inRequest) {
+                                        inBuf.flip()
+                                        len = inBuf.remaining()
+                                        if (len > 0) {
+                                            inBuf.get(readBuffer, 0, len)
+                                        }
+                                    }
+                                }
+                                inRequest.close()
+                            } catch (e: Exception) {
+                                Log.w(TAG, "UsbRequest error on USB INT IN endpoint: ${e.message}")
+                                len = -1
+                            }
                         }
 
                         if (len > 0) {
@@ -584,8 +616,7 @@ class MotorHandler {
                         var endpointOut: UsbEndpoint? = null
                         for (i in 0 until iface.endpointCount) {
                             val ep = iface.getEndpoint(i)
-                            if (ep.direction == UsbConstants.USB_DIR_OUT &&
-                                (ep.type == UsbConstants.USB_ENDPOINT_XFER_BULK || ep.type == UsbConstants.USB_ENDPOINT_XFER_INT)) {
+                            if (ep.direction == UsbConstants.USB_DIR_OUT) {
                                 endpointOut = ep
                                 break
                             }
@@ -593,7 +624,19 @@ class MotorHandler {
                         val command = "!DUTY ${config.phidgetChannel} ${String.format("%.2f", dutyCycle)}\r"
                         val bytes = command.toByteArray(Charsets.US_ASCII)
                         if (endpointOut != null) {
-                            conn.bulkTransfer(endpointOut, bytes, 0, bytes.size, 200)
+                            if (endpointOut.type == UsbConstants.USB_ENDPOINT_XFER_BULK) {
+                                conn.bulkTransfer(endpointOut, bytes, 0, bytes.size, 200)
+                            } else if (endpointOut.type == UsbConstants.USB_ENDPOINT_XFER_INT) {
+                                val outRequest = UsbRequest()
+                                outRequest.initialize(conn, endpointOut)
+                                val outBuf = ByteBuffer.wrap(bytes)
+                                if (outRequest.queue(outBuf)) {
+                                    conn.requestWait(200)
+                                }
+                                outRequest.close()
+                            } else {
+                                conn.controlTransfer(0x21, 0x09, 0x0200, 0, bytes, bytes.size, 200)
+                            }
                         } else {
                             conn.controlTransfer(0x21, 0x09, 0x0200, 0, bytes, bytes.size, 200)
                         }
