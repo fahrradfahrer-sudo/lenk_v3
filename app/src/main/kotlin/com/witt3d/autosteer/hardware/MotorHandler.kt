@@ -611,8 +611,10 @@ class MotorHandler {
                         encoder.deviceSerialNumber = currentConfig.phidgetSerialNumber
                     }
                     encoder.channel = currentConfig.phidgetChannel
+                    var runningCount = 0L
                     encoder.addPositionChangeListener { e ->
-                        _telemetry.value = _telemetry.value.copy(encoderCount = e.position)
+                        runningCount += e.positionChange
+                        _telemetry.value = _telemetry.value.copy(encoderCount = runningCount)
                     }
                     encoder.open(1000)
                 } catch (e: Exception) {
