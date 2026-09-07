@@ -14,6 +14,7 @@ import com.hoho.android.usbserial.driver.UsbSerialProber
 import com.witt3d.autosteer.data.models.MotorConfig
 import com.witt3d.autosteer.data.models.MotorTelemetry
 import com.witt3d.autosteer.data.models.MotorType
+import com.witt3d.autosteer.data.repository.MotorRepository
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -42,6 +43,7 @@ class MotorHandler {
     private var phidgetVoltageInput: com.phidget22.VoltageInput? = null
 
     private var communicationJob: Job? = null
+    private var phidgetConnectionJob: Job? = null
     private var simulationJob: Job? = null
     private var activityRef: java.lang.ref.WeakReference<android.app.Activity>? = null
     private var lastContext: Context? = null
@@ -539,8 +541,11 @@ class MotorHandler {
     }
 
     private fun connectPhidgetsMotor(device: UsbDevice) {
-        val currentConfig = _config.value
-        scope.launch(Dispatchers.IO) {
+        phidgetConnectionJob?.cancel()
+        phidgetConnectionJob = scope.launch(Dispatchers.IO) {
+            safelyClosePhidgets()
+
+            val currentConfig = _config.value
             try {
                 val motor = com.phidget22.DCMotor()
                 phidgetDcMotor = motor
@@ -553,6 +558,18 @@ class MotorHandler {
                 motor.addAttachListener { e ->
                     Log.d(TAG, "Phidget DCMotor Attached: ${e.source}")
                     scope.launch(Dispatchers.IO) {
+                        try {
+                            val sn = motor.deviceSerialNumber
+                            if (sn > 0 && _config.value.phidgetSerialNumber != sn) {
+                                _config.value = _config.value.copy(phidgetSerialNumber = sn)
+                                lastContext?.let { ctx ->
+                                    MotorRepository.saveMotorConfig(ctx, _config.value)
+                                }
+                            }
+                        } catch (ex: Exception) {
+                            Log.w(TAG, "Could not read Phidget deviceSerialNumber: ${ex.message}")
+                        }
+
                         try {
                             val minAccel = motor.minAcceleration
                             val maxAccel = motor.maxAcceleration
@@ -578,6 +595,10 @@ class MotorHandler {
                 motor.addDetachListener { e ->
                     Log.d(TAG, "Phidget DCMotor Detached: ${e.source}")
                     _config.value = _config.value.copy(isConnected = false)
+                    _telemetry.value = _telemetry.value.copy(
+                        isConnected = false,
+                        statusMessage = "Phidget Motor Detached"
+                    )
                 }
 
                 motor.addVelocityUpdateListener { e ->
@@ -587,28 +608,13 @@ class MotorHandler {
 
                 motor.open(5000)
 
-                // Optionally attach CurrentInput channel if present on the 1065_1B
-                try {
-                    val currentInput = com.phidget22.CurrentInput()
-                    phidgetCurrentInput = currentInput
-                    if (currentConfig.phidgetSerialNumber > 0) {
-                        currentInput.deviceSerialNumber = currentConfig.phidgetSerialNumber
-                    }
-                    currentInput.channel = currentConfig.phidgetChannel
-                    currentInput.addCurrentChangeListener { e ->
-                        _telemetry.value = _telemetry.value.copy(currentAmps = e.current)
-                    }
-                    currentInput.open(1000)
-                } catch (e: Exception) {
-                    Log.d(TAG, "Optional Phidget CurrentInput not attached: ${e.message}")
-                }
-
-                // Optionally attach Encoder channel if present on the 1065_1B
+                // Attach Encoder channel on channel 0
                 try {
                     val encoder = com.phidget22.Encoder()
                     phidgetEncoder = encoder
-                    if (currentConfig.phidgetSerialNumber > 0) {
-                        encoder.deviceSerialNumber = currentConfig.phidgetSerialNumber
+                    val sn = try { motor.deviceSerialNumber } catch (ex: Exception) { currentConfig.phidgetSerialNumber }
+                    if (sn > 0) {
+                        encoder.deviceSerialNumber = sn
                     }
                     encoder.channel = currentConfig.phidgetChannel
                     var runningCount = 0L
@@ -616,28 +622,50 @@ class MotorHandler {
                         runningCount += e.positionChange
                         _telemetry.value = _telemetry.value.copy(encoderCount = runningCount)
                     }
-                    encoder.open(1000)
+                    encoder.open(2000)
                 } catch (e: Exception) {
                     Log.d(TAG, "Optional Phidget Encoder not attached: ${e.message}")
                 }
 
-                // Optionally attach VoltageInput channel if present on the 1065_1B
-                try {
-                    val voltageInput = com.phidget22.VoltageInput()
-                    phidgetVoltageInput = voltageInput
-                    if (currentConfig.phidgetSerialNumber > 0) {
-                        voltageInput.deviceSerialNumber = currentConfig.phidgetSerialNumber
+                // Optionally attach CurrentInput channel in background
+                scope.launch(Dispatchers.IO) {
+                    try {
+                        val currentInput = com.phidget22.CurrentInput()
+                        phidgetCurrentInput = currentInput
+                        val sn = try { motor.deviceSerialNumber } catch (ex: Exception) { currentConfig.phidgetSerialNumber }
+                        if (sn > 0) {
+                            currentInput.deviceSerialNumber = sn
+                        }
+                        currentInput.channel = currentConfig.phidgetChannel
+                        currentInput.addCurrentChangeListener { e ->
+                            _telemetry.value = _telemetry.value.copy(currentAmps = e.current)
+                        }
+                        currentInput.open(1000)
+                    } catch (e: Exception) {
+                        Log.d(TAG, "Optional Phidget CurrentInput not attached: ${e.message}")
                     }
-                    voltageInput.channel = currentConfig.phidgetChannel
-                    voltageInput.addVoltageChangeListener { e ->
-                        _telemetry.value = _telemetry.value.copy(voltageVolts = e.voltage)
-                    }
-                    voltageInput.open(1000)
-                } catch (e: Exception) {
-                    Log.d(TAG, "Optional Phidget VoltageInput not attached: ${e.message}")
                 }
 
-                _config.value = currentConfig.copy(
+                // Optionally attach VoltageInput channel in background
+                scope.launch(Dispatchers.IO) {
+                    try {
+                        val voltageInput = com.phidget22.VoltageInput()
+                        phidgetVoltageInput = voltageInput
+                        val sn = try { motor.deviceSerialNumber } catch (ex: Exception) { currentConfig.phidgetSerialNumber }
+                        if (sn > 0) {
+                            voltageInput.deviceSerialNumber = sn
+                        }
+                        voltageInput.channel = currentConfig.phidgetChannel
+                        voltageInput.addVoltageChangeListener { e ->
+                            _telemetry.value = _telemetry.value.copy(voltageVolts = e.voltage)
+                        }
+                        voltageInput.open(1000)
+                    } catch (e: Exception) {
+                        Log.d(TAG, "Optional Phidget VoltageInput not attached: ${e.message}")
+                    }
+                }
+
+                _config.value = _config.value.copy(
                     isConnected = true,
                     usbDeviceDetected = true,
                     usbDeviceName = "Phidget Motor Controller 1065_1B (${device.deviceName})",
@@ -651,9 +679,10 @@ class MotorHandler {
 
                 Log.d(TAG, "Successfully connected to Phidget DCMotor via Phidget22 API")
             } catch (e: Exception) {
+                if (!isActive) return@launch
                 Log.e(TAG, "Error connecting Phidgets DCMotor via Phidget22 API", e)
                 safelyClosePhidgets()
-                _config.value = currentConfig.copy(
+                _config.value = _config.value.copy(
                     isConnected = false,
                     errorMessage = "Phidget22 Error: ${e.message}"
                 )
@@ -661,6 +690,7 @@ class MotorHandler {
         }
     }
 
+    @Synchronized
     private fun safelyClosePhidgets() {
         val ci = phidgetCurrentInput
         phidgetCurrentInput = null
@@ -697,6 +727,8 @@ class MotorHandler {
             communicationJob?.cancelAndJoin()
         }
         communicationJob = null
+        phidgetConnectionJob?.cancel()
+        phidgetConnectionJob = null
         simulationJob?.cancel()
         simulationJob = null
         isPermissionPending = false

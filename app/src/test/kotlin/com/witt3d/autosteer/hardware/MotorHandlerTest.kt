@@ -102,6 +102,7 @@ class MotorHandlerTest {
             phidgetChannel = 0,
             phidgetCurrentLimit = 8.0,
             phidgetAcceleration = 50.0,
+            phidgetSerialNumber = 623505,
             isSimulationMode = true
         )
         handler.updateConfig(phidgetConfig)
@@ -110,6 +111,7 @@ class MotorHandlerTest {
         Thread.sleep(200)
         assertTrue(handler.config.value.isConnected)
         assertEquals(MotorType.PHIDGETS, handler.config.value.motorType)
+        assertEquals(623505, handler.config.value.phidgetSerialNumber)
 
         handler.setTargetPowerPercent(-75f)
         Thread.sleep(300)
@@ -121,5 +123,21 @@ class MotorHandlerTest {
 
         handler.disconnect()
         assertFalse(handler.config.value.isConnected)
+    }
+
+    @Test
+    fun testPhidgetsDisconnectSafety() {
+        val handler = MotorHandler()
+        val phidgetConfig = MotorConfig(
+            motorType = MotorType.PHIDGETS,
+            phidgetChannel = 0,
+            phidgetSerialNumber = 623505,
+            isSimulationMode = false
+        )
+        handler.updateConfig(phidgetConfig)
+        // Disconnecting before or without active hardware connection must complete without exception
+        handler.disconnect()
+        assertFalse(handler.config.value.isConnected)
+        assertEquals(0f, handler.telemetry.value.targetPowerPercent, 0.01f)
     }
 }
