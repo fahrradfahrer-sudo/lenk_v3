@@ -37,6 +37,9 @@ class MotorHandler {
     private var usbInterface: UsbInterface? = null
 
     private var phidgetDcMotor: com.phidget22.DCMotor? = null
+    private var phidgetCurrentInput: com.phidget22.CurrentInput? = null
+    private var phidgetEncoder: com.phidget22.Encoder? = null
+    private var phidgetVoltageInput: com.phidget22.VoltageInput? = null
 
     private var communicationJob: Job? = null
     private var simulationJob: Job? = null
@@ -551,14 +554,23 @@ class MotorHandler {
                     Log.d(TAG, "Phidget DCMotor Attached: ${e.source}")
                     scope.launch(Dispatchers.IO) {
                         try {
-                            if (currentConfig.phidgetAcceleration > 0) {
-                                motor.acceleration = currentConfig.phidgetAcceleration
-                            }
-                            if (currentConfig.phidgetCurrentLimit > 0) {
-                                motor.currentLimit = currentConfig.phidgetCurrentLimit
-                            }
+                            val minAccel = motor.minAcceleration
+                            val maxAccel = motor.maxAcceleration
+                            val clampedAccel = currentConfig.phidgetAcceleration.coerceIn(minAccel, maxAccel)
+                            motor.acceleration = clampedAccel
+                            Log.d(TAG, "Set Phidget DCMotor acceleration: $clampedAccel (min: $minAccel, max: $maxAccel)")
                         } catch (ex: Exception) {
-                            Log.w(TAG, "Could not set Phidget acceleration/currentLimit: ${ex.message}")
+                            Log.w(TAG, "Could not set Phidget acceleration: ${ex.message}")
+                        }
+
+                        try {
+                            val minCurrent = motor.minCurrentLimit
+                            val maxCurrent = motor.maxCurrentLimit
+                            val clampedCurrent = currentConfig.phidgetCurrentLimit.coerceIn(minCurrent, maxCurrent)
+                            motor.currentLimit = clampedCurrent
+                            Log.d(TAG, "Set Phidget DCMotor currentLimit: $clampedCurrent (min: $minCurrent, max: $maxCurrent)")
+                        } catch (ex: Exception) {
+                            Log.w(TAG, "Could not set Phidget currentLimit: ${ex.message}")
                         }
                     }
                 }
@@ -574,6 +586,54 @@ class MotorHandler {
                 }
 
                 motor.open(5000)
+
+                // Optionally attach CurrentInput channel if present on the 1065_1B
+                try {
+                    val currentInput = com.phidget22.CurrentInput()
+                    phidgetCurrentInput = currentInput
+                    if (currentConfig.phidgetSerialNumber > 0) {
+                        currentInput.deviceSerialNumber = currentConfig.phidgetSerialNumber
+                    }
+                    currentInput.channel = currentConfig.phidgetChannel
+                    currentInput.addCurrentChangeListener { e ->
+                        _telemetry.value = _telemetry.value.copy(currentAmps = e.current)
+                    }
+                    currentInput.open(1000)
+                } catch (e: Exception) {
+                    Log.d(TAG, "Optional Phidget CurrentInput not attached: ${e.message}")
+                }
+
+                // Optionally attach Encoder channel if present on the 1065_1B
+                try {
+                    val encoder = com.phidget22.Encoder()
+                    phidgetEncoder = encoder
+                    if (currentConfig.phidgetSerialNumber > 0) {
+                        encoder.deviceSerialNumber = currentConfig.phidgetSerialNumber
+                    }
+                    encoder.channel = currentConfig.phidgetChannel
+                    encoder.addPositionChangeListener { e ->
+                        _telemetry.value = _telemetry.value.copy(encoderCount = e.position)
+                    }
+                    encoder.open(1000)
+                } catch (e: Exception) {
+                    Log.d(TAG, "Optional Phidget Encoder not attached: ${e.message}")
+                }
+
+                // Optionally attach VoltageInput channel if present on the 1065_1B
+                try {
+                    val voltageInput = com.phidget22.VoltageInput()
+                    phidgetVoltageInput = voltageInput
+                    if (currentConfig.phidgetSerialNumber > 0) {
+                        voltageInput.deviceSerialNumber = currentConfig.phidgetSerialNumber
+                    }
+                    voltageInput.channel = currentConfig.phidgetChannel
+                    voltageInput.addVoltageChangeListener { e ->
+                        _telemetry.value = _telemetry.value.copy(voltageVolts = e.voltage)
+                    }
+                    voltageInput.open(1000)
+                } catch (e: Exception) {
+                    Log.d(TAG, "Optional Phidget VoltageInput not attached: ${e.message}")
+                }
 
                 _config.value = currentConfig.copy(
                     isConnected = true,
@@ -600,6 +660,24 @@ class MotorHandler {
     }
 
     private fun safelyClosePhidgets() {
+        val ci = phidgetCurrentInput
+        phidgetCurrentInput = null
+        if (ci != null) {
+            try { ci.close() } catch (ignored: Exception) {}
+        }
+
+        val enc = phidgetEncoder
+        phidgetEncoder = null
+        if (enc != null) {
+            try { enc.close() } catch (ignored: Exception) {}
+        }
+
+        val vi = phidgetVoltageInput
+        phidgetVoltageInput = null
+        if (vi != null) {
+            try { vi.close() } catch (ignored: Exception) {}
+        }
+
         val m = phidgetDcMotor
         phidgetDcMotor = null
         if (m != null) {
@@ -734,53 +812,27 @@ class MotorHandler {
         val maxLimitRatio = (config.maxPowerLimitPercent.coerceIn(0, 100) / 100.0f)
         val dutyCycle = (effectivePowerPercent * maxLimitRatio).coerceIn(-100f, 100f)
 
-        val port = usbPort
-        if (port != null) {
-            val command = "!DUTY ${config.phidgetChannel} ${String.format("%.2f", dutyCycle)}\r"
-            scope.launch {
+        val motor = phidgetDcMotor
+        if (motor != null) {
+            scope.launch(Dispatchers.IO) {
                 try {
-                    port.write(command.toByteArray(Charsets.US_ASCII), 200)
+                    val targetVel = (dutyCycle / 100.0).coerceIn(-1.0, 1.0)
+                    motor.targetVelocity = targetVel
                     _telemetry.value = _telemetry.value.copy(actualPowerPercent = dutyCycle)
                 } catch (e: Exception) {
-                    Log.e(TAG, "Error sending Phidget command over serial", e)
+                    Log.e(TAG, "Error setting Phidget DCMotor targetVelocity", e)
                 }
             }
         } else {
-            val conn = usbConnection
-            val iface = usbInterface
-            if (conn != null && iface != null) {
+            val port = usbPort
+            if (port != null) {
+                val command = "!DUTY ${config.phidgetChannel} ${String.format("%.2f", dutyCycle)}\r"
                 scope.launch {
                     try {
-                        var endpointOut: UsbEndpoint? = null
-                        for (i in 0 until iface.endpointCount) {
-                            val ep = iface.getEndpoint(i)
-                            if (ep.direction == UsbConstants.USB_DIR_OUT) {
-                                endpointOut = ep
-                                break
-                            }
-                        }
-                        val command = "!DUTY ${config.phidgetChannel} ${String.format("%.2f", dutyCycle)}\r"
-                        val bytes = command.toByteArray(Charsets.US_ASCII)
-                        if (endpointOut != null) {
-                            if (endpointOut.type == UsbConstants.USB_ENDPOINT_XFER_BULK) {
-                                conn.bulkTransfer(endpointOut, bytes, 0, bytes.size, 200)
-                            } else if (endpointOut.type == UsbConstants.USB_ENDPOINT_XFER_INT) {
-                                val outRequest = UsbRequest()
-                                outRequest.initialize(conn, endpointOut)
-                                val outBuf = ByteBuffer.wrap(bytes)
-                                if (outRequest.queue(outBuf)) {
-                                    conn.requestWait(200)
-                                }
-                                outRequest.close()
-                            } else {
-                                conn.controlTransfer(0x21, 0x09, 0x0200, 0, bytes, bytes.size, 200)
-                            }
-                        } else {
-                            conn.controlTransfer(0x21, 0x09, 0x0200, 0, bytes, bytes.size, 200)
-                        }
+                        port.write(command.toByteArray(Charsets.US_ASCII), 200)
                         _telemetry.value = _telemetry.value.copy(actualPowerPercent = dutyCycle)
                     } catch (e: Exception) {
-                        Log.e(TAG, "Error sending Phidget command over raw USB", e)
+                        Log.e(TAG, "Error sending Phidget command over serial", e)
                     }
                 }
             }
