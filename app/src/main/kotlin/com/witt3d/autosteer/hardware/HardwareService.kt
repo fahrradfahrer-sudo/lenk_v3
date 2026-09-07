@@ -26,6 +26,12 @@ class HardwareService : Service() {
         super.onCreate()
         Log.d(TAG, "Hardware Service Created")
 
+        try {
+            com.phidget22.usb.Manager.Initialize(this.applicationContext)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to initialize Phidgets USB Manager in HardwareService", e)
+        }
+
         // Load persisted GPS, NTRIP, and Motor configurations
         val savedGpsConfig = GpsRepository.loadGpsConfig(this)
         gpsHandler.updateConfig(savedGpsConfig)
@@ -66,6 +72,13 @@ class HardwareService : Service() {
         gpsHandler.disconnect()
         ntripClient.disconnect()
         motorHandler.disconnect()
+
+        try {
+            com.phidget22.usb.Manager.Uninitialize()
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to uninitialize Phidgets USB Manager in HardwareService", e)
+        }
+
         Log.d(TAG, "Hardware Service Destroyed")
     }
 }

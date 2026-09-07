@@ -22,7 +22,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         try {
-            com.phidget22.usb.Manager.Initialize(this)
+            com.phidget22.usb.Manager.Initialize(this.applicationContext)
         } catch (e: Exception) {
             android.util.Log.e("MainActivity", "Failed to initialize Phidgets USB Manager", e)
         }
@@ -52,6 +52,15 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         scanAndConnectHardware()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        try {
+            com.phidget22.usb.Manager.Uninitialize()
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Failed to uninitialize Phidgets USB Manager", e)
+        }
     }
 
     private fun scanAndConnectHardware() {
