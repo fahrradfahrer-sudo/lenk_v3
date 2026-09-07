@@ -12,7 +12,7 @@ data class MotorConfig(
     val roboteqBaudRate: Int = 115200,
     val phidgetChannel: Int = 0,
     val phidgetSerialNumber: Int = -1, // -1 means any device
-    val phidgetAcceleration: Double = 100.0, // percent/s or duty cycle acceleration
+    val phidgetAcceleration: Double = 25.0, // Duty cycle acceleration (valid range on 1065_1B: 0.28 - 62.5)
     val phidgetCurrentLimit: Double = 10.0, // Amperes
     val invertDirection: Boolean = false,
     val maxPowerLimitPercent: Int = 100, // 0 to 100%

@@ -21,6 +21,12 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        try {
+            com.phidget22.usb.Manager.Initialize(this)
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Failed to initialize Phidgets USB Manager", e)
+        }
+
         requestPermissionLauncher.launch(
             arrayOf(
                 Manifest.permission.ACCESS_FINE_LOCATION,
