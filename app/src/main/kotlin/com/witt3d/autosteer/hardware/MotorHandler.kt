@@ -285,7 +285,12 @@ class MotorHandler {
             }
         }
 
-        // Check raw USB devices as fallback (e.g. Phidgets 1065_1B USB HID / raw USB Host connection)
+        if (currentConfig.motorType == MotorType.PHIDGETS) {
+            connectPhidgetsMotorDirect()
+            return
+        }
+
+        // Check raw USB devices as fallback (e.g. Roboteq raw USB Host connection)
         val rawDevices = usbManager.deviceList.values
         val motorDevice = rawDevices.firstOrNull { isMotorDevice(it, currentConfig.motorType) }
 
@@ -302,12 +307,7 @@ class MotorHandler {
             return
         }
 
-        if (currentConfig.motorType == MotorType.PHIDGETS) {
-            connectPhidgetsMotor(motorDevice)
-            return
-        }
-
-        // Direct Raw USB Host Connection for Phidgets / USB HID
+        // Direct Raw USB Host Connection for Roboteq / USB HID
         try {
             connectRawUsbDevice(usbManager, motorDevice)
             return
@@ -540,7 +540,7 @@ class MotorHandler {
         }
     }
 
-    private fun connectPhidgetsMotor(device: UsbDevice) {
+    private fun connectPhidgetsMotorDirect() {
         phidgetConnectionJob?.cancel()
         phidgetConnectionJob = scope.launch(Dispatchers.IO) {
             safelyClosePhidgets()
@@ -683,7 +683,7 @@ class MotorHandler {
                 _config.value = _config.value.copy(
                     isConnected = true,
                     usbDeviceDetected = true,
-                    usbDeviceName = "Phidget Motor Controller 1065_1B (${device.deviceName})",
+                    usbDeviceName = "Phidget Motor Controller 1065_1B",
                     errorMessage = null
                 )
 
