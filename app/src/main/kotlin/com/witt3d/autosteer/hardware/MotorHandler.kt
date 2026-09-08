@@ -285,7 +285,12 @@ class MotorHandler {
             }
         }
 
-        // Check raw USB devices as fallback (e.g. Phidgets 1065_1B USB HID / raw USB Host connection)
+        if (currentConfig.motorType == MotorType.PHIDGETS) {
+            connectPhidgetsMotorDirect()
+            return
+        }
+
+        // Check raw USB devices as fallback (e.g. Roboteq raw USB Host connection)
         val rawDevices = usbManager.deviceList.values
         val motorDevice = rawDevices.firstOrNull { isMotorDevice(it, currentConfig.motorType) }
 
@@ -302,12 +307,7 @@ class MotorHandler {
             return
         }
 
-        if (currentConfig.motorType == MotorType.PHIDGETS) {
-            connectPhidgetsMotor(motorDevice)
-            return
-        }
-
-        // Direct Raw USB Host Connection for Phidgets / USB HID
+        // Direct Raw USB Host Connection for Roboteq / USB HID
         try {
             connectRawUsbDevice(usbManager, motorDevice)
             return
@@ -540,7 +540,7 @@ class MotorHandler {
         }
     }
 
-    private fun connectPhidgetsMotor(device: UsbDevice) {
+    private fun connectPhidgetsMotorDirect() {
         phidgetConnectionJob?.cancel()
         phidgetConnectionJob = scope.launch(Dispatchers.IO) {
             safelyClosePhidgets()
@@ -627,7 +627,7 @@ class MotorHandler {
                     Log.d(TAG, "Optional Phidget Encoder not attached: ${e.message}")
                 }
 
-                // Optionally attach CurrentInput channel in background
+                // Attach CurrentInput channel in background (Channel 0 / phidgetChannel)
                 scope.launch(Dispatchers.IO) {
                     try {
                         val currentInput = com.phidget22.CurrentInput()
@@ -640,13 +640,20 @@ class MotorHandler {
                         currentInput.addCurrentChangeListener { e ->
                             _telemetry.value = _telemetry.value.copy(currentAmps = e.current)
                         }
-                        currentInput.open(1000)
+                        currentInput.open(5000)
+                        try {
+                            currentInput.dataInterval = 100
+                            currentInput.currentChangeTrigger = 0.05
+                        } catch (ex: Exception) {
+                            Log.w(TAG, "Could not set CurrentInput interval/trigger: ${ex.message}")
+                        }
+                        Log.d(TAG, "Successfully attached Phidget CurrentInput on channel ${currentConfig.phidgetChannel}")
                     } catch (e: Exception) {
-                        Log.d(TAG, "Optional Phidget CurrentInput not attached: ${e.message}")
+                        Log.w(TAG, "Phidget CurrentInput not attached: ${e.message}")
                     }
                 }
 
-                // Optionally attach VoltageInput channel in background
+                // Attach VoltageInput channel in background (Channel 2 for 1065_1B external supply voltage)
                 scope.launch(Dispatchers.IO) {
                     try {
                         val voltageInput = com.phidget22.VoltageInput()
@@ -655,20 +662,28 @@ class MotorHandler {
                         if (sn > 0) {
                             voltageInput.deviceSerialNumber = sn
                         }
-                        voltageInput.channel = currentConfig.phidgetChannel
+                        // Channel 2 is reserved for main power supply voltage on 1065_1B
+                        voltageInput.channel = 2
                         voltageInput.addVoltageChangeListener { e ->
                             _telemetry.value = _telemetry.value.copy(voltageVolts = e.voltage)
                         }
-                        voltageInput.open(1000)
+                        voltageInput.open(5000)
+                        try {
+                            voltageInput.dataInterval = 250
+                            voltageInput.voltageChangeTrigger = 0.1
+                        } catch (ex: Exception) {
+                            Log.w(TAG, "Could not set VoltageInput interval/trigger: ${ex.message}")
+                        }
+                        Log.d(TAG, "Successfully attached Phidget VoltageInput on channel 2")
                     } catch (e: Exception) {
-                        Log.d(TAG, "Optional Phidget VoltageInput not attached: ${e.message}")
+                        Log.w(TAG, "Phidget VoltageInput not attached: ${e.message}")
                     }
                 }
 
                 _config.value = _config.value.copy(
                     isConnected = true,
                     usbDeviceDetected = true,
-                    usbDeviceName = "Phidget Motor Controller 1065_1B (${device.deviceName})",
+                    usbDeviceName = "Phidget Motor Controller 1065_1B",
                     errorMessage = null
                 )
 
