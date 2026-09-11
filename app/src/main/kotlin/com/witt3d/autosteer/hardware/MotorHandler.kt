@@ -144,15 +144,24 @@ class MotorHandler {
         this.lastContext = context.applicationContext
 
         val currentType = _config.value.motorType
+        val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
+
         if (currentType == MotorType.PHIDGETS) {
-            _config.value = _config.value.copy(
-                usbDeviceDetected = true,
-                usbDeviceName = "Phidget Motor Controller 1065_1B"
-            )
+            val phidgetDevice = usbManager.deviceList.values.firstOrNull { isMotorDevice(it, MotorType.PHIDGETS) }
+            if (phidgetDevice != null) {
+                _config.value = _config.value.copy(
+                    usbDeviceDetected = true,
+                    usbDeviceName = "Phidget Motor Controller 1065_1B (${phidgetDevice.manufacturerName ?: "Phidgets"} - ${phidgetDevice.deviceName})"
+                )
+            } else {
+                _config.value = _config.value.copy(
+                    usbDeviceDetected = false,
+                    usbDeviceName = null
+                )
+            }
             return
         }
 
-        val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
         val prober = getCustomMotorProber()
         val availableDrivers = prober.findAllDrivers(usbManager).filter { isMotorDevice(it.device, currentType) }
 
@@ -222,16 +231,39 @@ class MotorHandler {
             return
         }
 
-        if (currentConfig.motorType == MotorType.PHIDGETS) {
-            connectPhidgetsMotorDirect()
-            return
-        }
-
         if (activeContext == null) {
             _config.value = currentConfig.copy(
                 isConnected = false,
                 errorMessage = "Context required for USB connection"
             )
+            return
+        }
+
+        if (currentConfig.motorType == MotorType.PHIDGETS) {
+            val usbManager = activeContext.getSystemService(Context.USB_SERVICE) as UsbManager
+            val phidgetDevice = usbManager.deviceList.values.firstOrNull { isMotorDevice(it, MotorType.PHIDGETS) }
+
+            if (phidgetDevice == null) {
+                _config.value = currentConfig.copy(
+                    isConnected = false,
+                    usbDeviceDetected = false,
+                    usbDeviceName = null,
+                    errorMessage = "No Phidgets Motor Controller found. Switch to Simulated mode for testing."
+                )
+                return
+            }
+
+            _config.value = currentConfig.copy(
+                usbDeviceDetected = true,
+                usbDeviceName = "Phidget Motor Controller 1065_1B (${phidgetDevice.manufacturerName ?: "Phidgets"} - ${phidgetDevice.deviceName})"
+            )
+
+            if (!usbManager.hasPermission(phidgetDevice)) {
+                requestUsbPermission(activeContext, usbManager, phidgetDevice)
+                return
+            }
+
+            connectPhidgetsMotorDirect()
             return
         }
 
