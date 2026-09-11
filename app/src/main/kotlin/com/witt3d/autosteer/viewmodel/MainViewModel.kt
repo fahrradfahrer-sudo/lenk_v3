@@ -27,6 +27,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlin.math.hypot
 
 class MainViewModel : ViewModel() {
     private val _telemetry = MutableStateFlow(TelemetryData())
@@ -127,7 +128,7 @@ class MainViewModel : ViewModel() {
 
         val activeLine = currentGuidance.abLine
 
-        if (activeLine != null) {
+        if (activeLine != null && activeLine.lengthMeters >= 0.1) {
             val cteMeters = activeLine.calculateCrossTrackErrorMeters(groundAxleUtm)
             val cteCm = cteMeters * 100.0
 
@@ -320,7 +321,9 @@ class MainViewModel : ViewModel() {
     fun setPointA() {
         val currentGuidance = _guidanceState.value
         val point = UtmPoint(currentGuidance.compensatedUtmX, currentGuidance.compensatedUtmY)
-        val newAbLine = if (currentGuidance.pointB != null) AbLine(point, currentGuidance.pointB) else null
+        val newAbLine = if (currentGuidance.pointB != null && hypot(point.x - currentGuidance.pointB.x, point.y - currentGuidance.pointB.y) >= 0.1) {
+            AbLine(point, currentGuidance.pointB)
+        } else null
         _guidanceState.value = currentGuidance.copy(
             pointA = point,
             abLine = newAbLine
@@ -330,7 +333,9 @@ class MainViewModel : ViewModel() {
     fun setPointB() {
         val currentGuidance = _guidanceState.value
         val point = UtmPoint(currentGuidance.compensatedUtmX, currentGuidance.compensatedUtmY)
-        val newAbLine = if (currentGuidance.pointA != null) AbLine(currentGuidance.pointA, point) else null
+        val newAbLine = if (currentGuidance.pointA != null && hypot(point.x - currentGuidance.pointA.x, point.y - currentGuidance.pointA.y) >= 0.1) {
+            AbLine(currentGuidance.pointA, point)
+        } else null
         _guidanceState.value = currentGuidance.copy(
             pointB = point,
             abLine = newAbLine
@@ -354,7 +359,7 @@ class MainViewModel : ViewModel() {
         if (current.isAutoSteerEngaged) {
             disengageAutoSteer()
         } else {
-            if (current.abLine != null) {
+            if (current.abLine != null && current.abLine.lengthMeters >= 0.1) {
                 _guidanceState.value = current.copy(
                     isAutoSteerEngaged = true,
                     steeringStatusMessage = "AUTOSTEER ENGAGED"

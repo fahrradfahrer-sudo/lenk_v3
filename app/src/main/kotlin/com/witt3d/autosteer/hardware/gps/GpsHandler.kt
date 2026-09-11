@@ -99,11 +99,9 @@ class GpsHandler {
 
     private fun isGpsDevice(device: UsbDevice): Boolean {
         val vid = device.vendorId
-        // Exclude Motor Controllers (Phidgets, Roboteq) and IMUs (Tinkerforge)
         if (vid == 0x06C2 || vid == 1730 || vid == 0x20D1 || vid == 8401 || vid == 0x0525 || vid == 1317 || vid == 0x16D0 || vid == 5840) {
             return false
         }
-        // Match u-blox, CH340/CH341, FTDI, Prolific, Silicon Labs CP210x
         return vid == 0x1546 || vid == 5446 || vid == 0x1A86 || vid == 6790 || vid == 0x4348 || vid == 0x0403 || vid == 0x10C4 || vid == 0x067B
     }
 
@@ -120,36 +118,21 @@ class GpsHandler {
 
         if (gpsDrivers.isNotEmpty()) {
             val device = gpsDrivers[0].device
-            val hasPerm = usbManager.hasPermission(device)
-            if (hasPerm) {
-                isPermissionPending = false
-            }
             val devName = "${device.manufacturerName ?: "u-blox"} (${device.productName ?: "GPS Receiver"})"
             _config.value = _config.value.copy(
                 usbDeviceDetected = true,
                 usbDeviceName = devName
             )
-            if (!hasPerm && !isPermissionPending) {
-                requestUsbPermission(context, usbManager, device)
-            }
         } else {
             val rawDevices = usbManager.deviceList.values
             val matchedDevice = rawDevices.firstOrNull { isGpsDevice(it) }
             if (matchedDevice != null) {
-                val hasPerm = usbManager.hasPermission(matchedDevice)
-                if (hasPerm) {
-                    isPermissionPending = false
-                }
                 val devName = "${matchedDevice.manufacturerName ?: "u-blox"} (${matchedDevice.productName ?: "GPS Receiver"})"
                 _config.value = _config.value.copy(
                     usbDeviceDetected = true,
                     usbDeviceName = devName
                 )
-                if (!hasPerm && !isPermissionPending) {
-                    requestUsbPermission(context, usbManager, matchedDevice)
-                }
             } else {
-                isPermissionPending = false
                 _config.value = _config.value.copy(
                     usbDeviceDetected = false,
                     usbDeviceName = null
@@ -205,7 +188,6 @@ class GpsHandler {
                             val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
                             Log.d(TAG, "GPS USB Permission callback result: $granted")
                             if (granted) {
-                                scanUsbDevices(activityContext)
                                 connect(activityContext)
                             } else {
                                 _config.value = _config.value.copy(
@@ -403,11 +385,10 @@ class GpsHandler {
             var simLat = 48.137154
             var simLon = 11.576124
             var simHeading = 90.0
-            val speedKmh = 12.0 // 12 km/h typical tractor speed
+            val speedKmh = 12.0
 
             while (isActive) {
-                // Move position based on speed & heading
-                val distanceMetersPerSec = (speedKmh * 1000.0 / 3600.0) * 0.2 // 200ms tick
+                val distanceMetersPerSec = (speedKmh * 1000.0 / 3600.0) * 0.2
                 val deltaLat = (distanceMetersPerSec * Math.cos(Math.toRadians(simHeading))) / 111111.0
                 val deltaLon = (distanceMetersPerSec * Math.sin(Math.toRadians(simHeading))) / (111111.0 * Math.cos(Math.toRadians(simLat)))
 

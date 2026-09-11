@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.isSpecified
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -40,15 +41,20 @@ fun CustomGridViewer(
         val center = Offset(width / 2f, height / 2f)
 
         // Reference center in UTM (tractor position or origin if tractor is at 0)
-        val refX = if (currentAxleUtm.x != 0.0) currentAxleUtm.x else 0.0
-        val refY = if (currentAxleUtm.y != 0.0) currentAxleUtm.y else 0.0
+        val refX = if (!currentAxleUtm.x.isNaN() && currentAxleUtm.x != 0.0) currentAxleUtm.x else 0.0
+        val refY = if (!currentAxleUtm.y.isNaN() && currentAxleUtm.y != 0.0) currentAxleUtm.y else 0.0
 
         fun utmToScreen(utmPoint: UtmPoint): Offset {
+            if (utmPoint.x.isNaN() || utmPoint.y.isNaN() || utmPoint.x.isInfinite() || utmPoint.y.isInfinite()) {
+                return Offset.Unspecified
+            }
             val dx = (utmPoint.x - refX).toFloat()
             val dy = (utmPoint.y - refY).toFloat()
-            // North is UP (-Y on screen), East is RIGHT (+X on screen)
             val screenX = center.x + panOffset.x + (dx * zoomScale)
             val screenY = center.y + panOffset.y - (dy * zoomScale)
+            if (screenX.isNaN() || screenY.isNaN() || screenX.isInfinite() || screenY.isInfinite()) {
+                return Offset.Unspecified
+            }
             return Offset(screenX, screenY)
         }
 
@@ -63,27 +69,31 @@ fun CustomGridViewer(
 
         for (i in startX..endX) {
             val sx = center.x + panOffset.x + (i * gridStepPx)
-            drawLine(
-                color = Color.LightGray.copy(alpha = 0.5f),
-                start = Offset(sx, 0f),
-                end = Offset(sx, height),
-                strokeWidth = 1f
-            )
+            if (!sx.isNaN() && !sx.isInfinite()) {
+                drawLine(
+                    color = Color.LightGray.copy(alpha = 0.5f),
+                    start = Offset(sx, 0f),
+                    end = Offset(sx, height),
+                    strokeWidth = 1f
+                )
+            }
         }
 
         for (j in startY..endY) {
             val sy = center.y + panOffset.y + (j * gridStepPx)
-            drawLine(
-                color = Color.LightGray.copy(alpha = 0.5f),
-                start = Offset(0f, sy),
-                end = Offset(width, sy),
-                strokeWidth = 1f
-            )
+            if (!sy.isNaN() && !sy.isInfinite()) {
+                drawLine(
+                    color = Color.LightGray.copy(alpha = 0.5f),
+                    start = Offset(0f, sy),
+                    end = Offset(width, sy),
+                    strokeWidth = 1f
+                )
+            }
         }
 
         // Draw AB Guidance Line & Parallel Tracks
         val abLine = guidanceState.abLine
-        if (abLine != null) {
+        if (abLine != null && abLine.lengthMeters >= 0.1) {
             val lineDirX = abLine.dx / abLine.lengthMeters
             val lineDirY = abLine.dy / abLine.lengthMeters
 
@@ -99,92 +109,104 @@ fun CustomGridViewer(
             val pStart = utmToScreen(startUtm)
             val pEnd = utmToScreen(endUtm)
 
-            // Draw parallel track lines
-            val passes = 10
-            val spacing = if (trackWidthMeters > 0.5) trackWidthMeters else 2.0
-            for (p in -passes..passes) {
-                if (p == 0) continue
-                val offsetM = p * spacing
-                val p1 = UtmPoint(startUtm.x + normX * offsetM, startUtm.y + normY * offsetM)
-                val p2 = UtmPoint(endUtm.x + normX * offsetM, endUtm.y + normY * offsetM)
+            if (pStart.isSpecified && pEnd.isSpecified) {
+                // Draw parallel track lines
+                val passes = 10
+                val spacing = if (trackWidthMeters > 0.5) trackWidthMeters else 2.0
+                for (p in -passes..passes) {
+                    if (p == 0) continue
+                    val offsetM = p * spacing
+                    val p1 = UtmPoint(startUtm.x + normX * offsetM, startUtm.y + normY * offsetM)
+                    val p2 = UtmPoint(endUtm.x + normX * offsetM, endUtm.y + normY * offsetM)
+                    val sp1 = utmToScreen(p1)
+                    val sp2 = utmToScreen(p2)
+                    if (sp1.isSpecified && sp2.isSpecified) {
+                        drawLine(
+                            color = Color.Cyan.copy(alpha = 0.35f),
+                            start = sp1,
+                            end = sp2,
+                            strokeWidth = 1.5f
+                        )
+                    }
+                }
+
+                // Draw main AB line
                 drawLine(
-                    color = Color.Cyan.copy(alpha = 0.35f),
-                    start = utmToScreen(p1),
-                    end = utmToScreen(p2),
-                    strokeWidth = 1.5f
+                    color = if (guidanceState.isAutoSteerEngaged) Color(0xFF00E676) else Color(0xFF29B6F6),
+                    start = pStart,
+                    end = pEnd,
+                    strokeWidth = 4f
                 )
             }
-
-            // Draw main AB line
-            drawLine(
-                color = if (guidanceState.isAutoSteerEngaged) Color(0xFF00E676) else Color(0xFF29B6F6),
-                start = pStart,
-                end = pEnd,
-                strokeWidth = 4f
-            )
         }
 
         // Draw Point A
         guidanceState.pointA?.let { pA ->
             val screenA = utmToScreen(pA)
-            drawCircle(color = Color.Red, radius = 8f, center = screenA)
-            drawCircle(color = Color.White, radius = 4f, center = screenA)
+            if (screenA.isSpecified) {
+                drawCircle(color = Color.Red, radius = 8f, center = screenA)
+                drawCircle(color = Color.White, radius = 4f, center = screenA)
+            }
         }
 
         // Draw Point B
         guidanceState.pointB?.let { pB ->
             val screenB = utmToScreen(pB)
-            drawCircle(color = Color(0xFF00C853), radius = 8f, center = screenB)
-            drawCircle(color = Color.White, radius = 4f, center = screenB)
+            if (screenB.isSpecified) {
+                drawCircle(color = Color(0xFF00C853), radius = 8f, center = screenB)
+                drawCircle(color = Color.White, radius = 4f, center = screenB)
+            }
         }
 
         // Draw Tractor Icon at Ground Rear Axle position
         val tractorScreenPos = utmToScreen(currentAxleUtm)
 
-        withTransform({
-            translate(tractorScreenPos.x, tractorScreenPos.y)
-            rotate(headingDegrees.toFloat(), Offset.Zero)
-        }) {
-            // Draw tractor body rectangle (width 18px, length 36px)
-            val bodyWidth = 18f
-            val bodyLength = 36f
-
-            // Tractor rear axle at center (0,0)
-            drawRect(
-                color = if (guidanceState.isAutoSteerEngaged) Color(0xFF00E676) else Color(0xFFFF9800),
-                topLeft = Offset(-bodyWidth / 2f, -bodyLength + 8f),
-                size = androidx.compose.ui.geometry.Size(bodyWidth, bodyLength),
-                style = Stroke(width = 3f)
-            )
-
-            // Front wheels with steering angle rotation
-            val steerAngle = guidanceState.currentSteeringAngleDegrees.toFloat()
-            val frontAxleY = -bodyLength + 12f
-
-            // Left Front Wheel
+        if (tractorScreenPos.isSpecified) {
             withTransform({
-                translate(-bodyWidth / 2f, frontAxleY)
-                rotate(steerAngle, Offset.Zero)
+                translate(tractorScreenPos.x, tractorScreenPos.y)
+                rotate(headingDegrees.toFloat(), Offset.Zero)
             }) {
-                drawLine(Color.Black, Offset(0f, -6f), Offset(0f, 6f), strokeWidth = 4f)
-            }
+                // Draw tractor body rectangle (width 18px, length 36px)
+                val bodyWidth = 18f
+                val bodyLength = 36f
 
-            // Right Front Wheel
-            withTransform({
-                translate(bodyWidth / 2f, frontAxleY)
-                rotate(steerAngle, Offset.Zero)
-            }) {
-                drawLine(Color.Black, Offset(0f, -6f), Offset(0f, 6f), strokeWidth = 4f)
-            }
+                // Tractor rear axle at center (0,0)
+                drawRect(
+                    color = if (guidanceState.isAutoSteerEngaged) Color(0xFF00E676) else Color(0xFFFF9800),
+                    topLeft = Offset(-bodyWidth / 2f, -bodyLength + 8f),
+                    size = androidx.compose.ui.geometry.Size(bodyWidth, bodyLength),
+                    style = Stroke(width = 3f)
+                )
 
-            // Direction arrow triangle pointing forward (-Y)
-            val arrowPath = Path().apply {
-                moveTo(0f, -bodyLength - 6f)
-                lineTo(-6f, -bodyLength + 4f)
-                lineTo(6f, -bodyLength + 4f)
-                close()
+                // Front wheels with steering angle rotation
+                val steerAngle = if (guidanceState.currentSteeringAngleDegrees.isNaN()) 0f else guidanceState.currentSteeringAngleDegrees.toFloat()
+                val frontAxleY = -bodyLength + 12f
+
+                // Left Front Wheel
+                withTransform({
+                    translate(-bodyWidth / 2f, frontAxleY)
+                    rotate(steerAngle, Offset.Zero)
+                }) {
+                    drawLine(Color.Black, Offset(0f, -6f), Offset(0f, 6f), strokeWidth = 4f)
+                }
+
+                // Right Front Wheel
+                withTransform({
+                    translate(bodyWidth / 2f, frontAxleY)
+                    rotate(steerAngle, Offset.Zero)
+                }) {
+                    drawLine(Color.Black, Offset(0f, -6f), Offset(0f, 6f), strokeWidth = 4f)
+                }
+
+                // Direction arrow triangle pointing forward (-Y)
+                val arrowPath = Path().apply {
+                    moveTo(0f, -bodyLength - 6f)
+                    lineTo(-6f, -bodyLength + 4f)
+                    lineTo(6f, -bodyLength + 4f)
+                    close()
+                }
+                drawPath(arrowPath, color = Color.Red)
             }
-            drawPath(arrowPath, color = Color.Red)
         }
     }
 }
