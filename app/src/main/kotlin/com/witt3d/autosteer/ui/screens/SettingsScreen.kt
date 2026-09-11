@@ -10,7 +10,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.witt3d.autosteer.data.models.MotorControlMode
 import com.witt3d.autosteer.data.models.MotorType
+import com.witt3d.autosteer.data.models.SteeringAlgorithm
 import com.witt3d.autosteer.ui.components.ImuVisualizer3D
 import com.witt3d.autosteer.viewmodel.MainViewModel
 
@@ -23,6 +25,9 @@ fun SettingsScreen(viewModel: MainViewModel = viewModel()) {
     val ntripConfig by viewModel.ntripConfig.collectAsState()
     val motorConfig by viewModel.motorConfig.collectAsState()
     val motorTelemetry by viewModel.motorTelemetry.collectAsState()
+    val tractorConfig by viewModel.tractorConfig.collectAsState()
+    val steeringConfig by viewModel.steeringConfig.collectAsState()
+    val guidanceState by viewModel.guidanceState.collectAsState()
 
     var motorSliderValue by remember(motorTelemetry.targetPowerPercent) { mutableStateOf(motorTelemetry.targetPowerPercent) }
 
@@ -42,6 +47,25 @@ fun SettingsScreen(viewModel: MainViewModel = viewModel()) {
     var phidgetAccelText by remember(motorConfig.phidgetAcceleration) { mutableStateOf(motorConfig.phidgetAcceleration.toString()) }
     var phidgetCurrentLimitText by remember(motorConfig.phidgetCurrentLimit) { mutableStateOf(motorConfig.phidgetCurrentLimit.toString()) }
 
+    // Tractor Measurements State
+    var wheelbaseText by remember(tractorConfig.wheelbaseCm) { mutableStateOf(tractorConfig.wheelbaseCm.toString()) }
+    var antennaToRearText by remember(tractorConfig.antennaToRearAxleCm) { mutableStateOf(tractorConfig.antennaToRearAxleCm.toString()) }
+    var antennaHeightText by remember(tractorConfig.antennaHeightCm) { mutableStateOf(tractorConfig.antennaHeightCm.toString()) }
+    var trackWidthText by remember(tractorConfig.trackWidthCm) { mutableStateOf(tractorConfig.trackWidthCm.toString()) }
+    var maxSteeringAngleText by remember(tractorConfig.maxSteeringAngleDegrees) { mutableStateOf(tractorConfig.maxSteeringAngleDegrees.toString()) }
+    var antennaOffsetText by remember(tractorConfig.antennaOffsetCm) { mutableStateOf(tractorConfig.antennaOffsetCm.toString()) }
+
+    // Steering Algorithm & Motor Tuning State
+    var lookaheadDistText by remember(steeringConfig.lookaheadDistanceMeters) { mutableStateOf(steeringConfig.lookaheadDistanceMeters.toString()) }
+    var lookaheadGainText by remember(steeringConfig.lookaheadSpeedGain) { mutableStateOf(steeringConfig.lookaheadSpeedGain.toString()) }
+    var stanleyKText by remember(steeringConfig.stanleyK) { mutableStateOf(steeringConfig.stanleyK.toString()) }
+    var stanleyHeadingGainText by remember(steeringConfig.stanleyHeadingGain) { mutableStateOf(steeringConfig.stanleyHeadingGain.toString()) }
+    var passesPerDegreeText by remember(steeringConfig.passesPerDegree) { mutableStateOf(steeringConfig.passesPerDegree.toString()) }
+    var kpText by remember(steeringConfig.kp) { mutableStateOf(steeringConfig.kp.toString()) }
+    var kiText by remember(steeringConfig.ki) { mutableStateOf(steeringConfig.ki.toString()) }
+    var kdText by remember(steeringConfig.kd) { mutableStateOf(steeringConfig.kd.toString()) }
+    var deadbandText by remember(steeringConfig.deadbandDegrees) { mutableStateOf(steeringConfig.deadbandDegrees.toString()) }
+
     // Interactive simulation slider values
     var simRoll by remember { mutableStateOf(0f) }
     var simPitch by remember { mutableStateOf(0f) }
@@ -59,7 +83,309 @@ fun SettingsScreen(viewModel: MainViewModel = viewModel()) {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        item { Text("Hardware Configuration", style = MaterialTheme.typography.headlineMedium) }
+        item { Text("Hardware & Steering Configuration", style = MaterialTheme.typography.headlineMedium) }
+
+        // Tractor Dimensions Card
+        item {
+            HardwareSection("Tractor Measurements (Centimeters)") {
+                Text(
+                    "Configure standard tractor dimensions used for tilt compensation and steering kinematics.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = wheelbaseText,
+                        onValueChange = {
+                            wheelbaseText = it
+                            it.toDoubleOrNull()?.let { wb ->
+                                viewModel.updateTractorConfig(context, tractorConfig.copy(wheelbaseCm = wb))
+                            }
+                        },
+                        label = { Text("Wheelbase (cm)") },
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedTextField(
+                        value = antennaToRearText,
+                        onValueChange = {
+                            antennaToRearText = it
+                            it.toDoubleOrNull()?.let { ar ->
+                                viewModel.updateTractorConfig(context, tractorConfig.copy(antennaToRearAxleCm = ar))
+                            }
+                        },
+                        label = { Text("Antenna -> Rear Axle (cm)") },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = antennaHeightText,
+                        onValueChange = {
+                            antennaHeightText = it
+                            it.toDoubleOrNull()?.let { ah ->
+                                viewModel.updateTractorConfig(context, tractorConfig.copy(antennaHeightCm = ah))
+                            }
+                        },
+                        label = { Text("Antenna Height (cm)") },
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedTextField(
+                        value = trackWidthText,
+                        onValueChange = {
+                            trackWidthText = it
+                            it.toDoubleOrNull()?.let { tw ->
+                                viewModel.updateTractorConfig(context, tractorConfig.copy(trackWidthCm = tw))
+                            }
+                        },
+                        label = { Text("Track Width (cm)") },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = maxSteeringAngleText,
+                        onValueChange = {
+                            maxSteeringAngleText = it
+                            it.toDoubleOrNull()?.let { ma ->
+                                viewModel.updateTractorConfig(context, tractorConfig.copy(maxSteeringAngleDegrees = ma))
+                            }
+                        },
+                        label = { Text("Max Steering Angle (°)") },
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedTextField(
+                        value = antennaOffsetText,
+                        onValueChange = {
+                            antennaOffsetText = it
+                            it.toDoubleOrNull()?.let { ao ->
+                                viewModel.updateTractorConfig(context, tractorConfig.copy(antennaOffsetCm = ao))
+                            }
+                        },
+                        label = { Text("Antenna Offset (cm)") },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+        }
+
+        // Steering Algorithm & Motor Parameters Card
+        item {
+            HardwareSection("Steering Algorithm & Control Parameters") {
+                Text("Select steering algorithm and configure motor control feedback.", style = MaterialTheme.typography.bodyMedium)
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Text("Algorithm Selection:", style = MaterialTheme.typography.titleMedium)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilterChip(
+                        selected = steeringConfig.algorithm == SteeringAlgorithm.PURE_PURSUIT,
+                        onClick = { viewModel.updateSteeringConfig(context, steeringConfig.copy(algorithm = SteeringAlgorithm.PURE_PURSUIT)) },
+                        label = { Text("Pure Pursuit") }
+                    )
+                    FilterChip(
+                        selected = steeringConfig.algorithm == SteeringAlgorithm.STANLEY,
+                        onClick = { viewModel.updateSteeringConfig(context, steeringConfig.copy(algorithm = SteeringAlgorithm.STANLEY)) },
+                        label = { Text("Stanley") }
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                if (steeringConfig.algorithm == SteeringAlgorithm.PURE_PURSUIT) {
+                    Text("Pure Pursuit Parameters:", style = MaterialTheme.typography.titleSmall)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = lookaheadDistText,
+                            onValueChange = {
+                                lookaheadDistText = it
+                                it.toDoubleOrNull()?.let { ld ->
+                                    viewModel.updateSteeringConfig(context, steeringConfig.copy(lookaheadDistanceMeters = ld))
+                                }
+                            },
+                            label = { Text("Lookahead Dist (m)") },
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = lookaheadGainText,
+                            onValueChange = {
+                                lookaheadGainText = it
+                                it.toDoubleOrNull()?.let { lg ->
+                                    viewModel.updateSteeringConfig(context, steeringConfig.copy(lookaheadSpeedGain = lg))
+                                }
+                            },
+                            label = { Text("Speed Gain (k)") },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                } else {
+                    Text("Stanley Parameters:", style = MaterialTheme.typography.titleSmall)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = stanleyKText,
+                            onValueChange = {
+                                stanleyKText = it
+                                it.toDoubleOrNull()?.let { sk ->
+                                    viewModel.updateSteeringConfig(context, steeringConfig.copy(stanleyK = sk))
+                                }
+                            },
+                            label = { Text("Cross-Track Gain (k)") },
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = stanleyHeadingGainText,
+                            onValueChange = {
+                                stanleyHeadingGainText = it
+                                it.toDoubleOrNull()?.let { shg ->
+                                    viewModel.updateSteeringConfig(context, steeringConfig.copy(stanleyHeadingGain = shg))
+                                }
+                            },
+                            label = { Text("Heading Gain") },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Text("Motor Steering Control Mode:", style = MaterialTheme.typography.titleMedium)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilterChip(
+                        selected = steeringConfig.controlMode == MotorControlMode.PASSES_PER_DEGREE,
+                        onClick = { viewModel.updateSteeringConfig(context, steeringConfig.copy(controlMode = MotorControlMode.PASSES_PER_DEGREE)) },
+                        label = { Text("Passes-per-Degree (Cerea)") }
+                    )
+                    FilterChip(
+                        selected = steeringConfig.controlMode == MotorControlMode.PID,
+                        onClick = { viewModel.updateSteeringConfig(context, steeringConfig.copy(controlMode = MotorControlMode.PID)) },
+                        label = { Text("PID Closed Loop") }
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = passesPerDegreeText,
+                        onValueChange = {
+                            passesPerDegreeText = it
+                            it.toIntOrNull()?.let { ppd ->
+                                viewModel.updateSteeringConfig(context, steeringConfig.copy(passesPerDegree = ppd))
+                            }
+                        },
+                        label = { Text("Passes per Degree (Encoder)") },
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedTextField(
+                        value = deadbandText,
+                        onValueChange = {
+                            deadbandText = it
+                            it.toDoubleOrNull()?.let { db ->
+                                viewModel.updateSteeringConfig(context, steeringConfig.copy(deadbandDegrees = db))
+                            }
+                        },
+                        label = { Text("Deadband (°)") },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                if (steeringConfig.controlMode == MotorControlMode.PID) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = kpText,
+                            onValueChange = {
+                                kpText = it
+                                it.toDoubleOrNull()?.let { p -> viewModel.updateSteeringConfig(context, steeringConfig.copy(kp = p)) }
+                            },
+                            label = { Text("Kp") },
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = kiText,
+                            onValueChange = {
+                                kiText = it
+                                it.toDoubleOrNull()?.let { i -> viewModel.updateSteeringConfig(context, steeringConfig.copy(ki = i)) }
+                            },
+                            label = { Text("Ki") },
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = kdText,
+                            onValueChange = {
+                                kdText = it
+                                it.toDoubleOrNull()?.let { d -> viewModel.updateSteeringConfig(context, steeringConfig.copy(kd = d)) }
+                            },
+                            label = { Text("Kd") },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Zero Center Calibration Card
+                OutlinedCard(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text("Steering Encoder Center Calibration", style = MaterialTheme.typography.titleMedium)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            "Current Encoder Raw: ${motorTelemetry.encoderCount} | Zero-Center Offset: ${steeringConfig.encoderCenterOffset}",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            "Estimated Current Wheel Angle: ${String.format("%.1f", guidanceState.currentSteeringAngleDegrees)}°",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Button(
+                            onClick = { viewModel.setSteeringCenter(context) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("SET CURRENT STEERING AS CENTER (0°)")
+                        }
+                    }
+                }
+            }
+        }
 
         // 3D Visualizer
         item {
@@ -706,10 +1032,10 @@ fun SettingsScreen(viewModel: MainViewModel = viewModel()) {
                         }
 
                         Spacer(modifier = Modifier.height(12.dp))
-                        Divider()
+                        HorizontalDivider()
                         Spacer(modifier = Modifier.height(12.dp))
 
-                        // Live Telemetry Readouts
+                        // Live Metrics Readout
                         Text("Live Metrics:", style = MaterialTheme.typography.labelLarge)
                         Spacer(modifier = Modifier.height(4.dp))
 
