@@ -85,6 +85,15 @@ class MotorHandler {
         }
     }
 
+    fun isConnectedAndActive(): Boolean {
+        if (!_config.value.isConnected) return false
+        if (_config.value.motorType == MotorType.PHIDGETS) {
+            val motor = phidgetDcMotor ?: return false
+            return try { motor.attached } catch (e: Exception) { false }
+        }
+        return true
+    }
+
     private fun registerUsbReceiver(context: Context) {
         if (isUsbReceiverRegistered) return
         try {
@@ -224,6 +233,10 @@ class MotorHandler {
     }
 
     fun connect(context: Context? = null) {
+        if (isConnectedAndActive()) {
+            Log.d(TAG, "Motor already actively connected. Skipping redundant connection attempt.")
+            return
+        }
         disconnect()
 
         if (context != null) {
