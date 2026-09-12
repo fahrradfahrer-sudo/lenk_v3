@@ -14,6 +14,7 @@
 
     <!-- Roboteq Motor Controllers & USB Serial Interfaces -->
     <usb-device vendor-id="8401" /> <!-- 0x20D1 Roboteq -->
+    <usb-device vendor-id="8402" /> <!-- 0x20D2 Roboteq SDC2160 -->
     <usb-device vendor-id="1317" /> <!-- 0x0525 Roboteq / NETA -->
     <usb-device vendor-id="2893" /> <!-- 0x0B4D Roboteq Inc. -->
     <usb-device vendor-id="1155" /> <!-- 0x0483 STMicroelectronics (Roboteq SDC2160 / CDC ACM) -->
