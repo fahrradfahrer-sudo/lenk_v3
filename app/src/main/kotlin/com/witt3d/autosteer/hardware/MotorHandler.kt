@@ -9,6 +9,7 @@ import android.hardware.usb.*
 import android.os.Build
 import android.util.Log
 import com.hoho.android.usbserial.driver.CdcAcmSerialDriver
+import com.hoho.android.usbserial.driver.FtdiSerialDriver
 import com.hoho.android.usbserial.driver.UsbSerialPort
 import com.hoho.android.usbserial.driver.UsbSerialProber
 import com.witt3d.autosteer.data.models.MotorConfig
@@ -84,6 +85,15 @@ class MotorHandler {
         }
     }
 
+    fun isConnectedAndActive(): Boolean {
+        if (!_config.value.isConnected) return false
+        if (_config.value.motorType == MotorType.PHIDGETS) {
+            val motor = phidgetDcMotor ?: return false
+            return try { motor.attached } catch (e: Exception) { false }
+        }
+        return true
+    }
+
     private fun registerUsbReceiver(context: Context) {
         if (isUsbReceiverRegistered) return
         try {
@@ -105,10 +115,16 @@ class MotorHandler {
 
     private fun getCustomMotorProber(): UsbSerialProber {
         val probeTable = UsbSerialProber.getDefaultProbeTable()
-        // Roboteq VIDs (0x20D1 / 8401, 0x0525 / 1317) using CDC ACM driver
-        // Note: Phidgets motor controllers (0x06C2) use Phidget22 native SDK directly
+        // Roboteq VIDs (0x20D1 / 8401, 0x0525 / 1317, 0x0403 FTDI)
+        // Add common Roboteq product IDs for both CDC ACM and FTDI drivers
         probeTable.addProduct(0x20D1, 0x5740, CdcAcmSerialDriver::class.java)
+        probeTable.addProduct(0x20D1, 0x5741, CdcAcmSerialDriver::class.java)
         probeTable.addProduct(0x0525, 0xA4A7, CdcAcmSerialDriver::class.java)
+        probeTable.addProduct(0x0525, 0xA4A8, CdcAcmSerialDriver::class.java)
+        probeTable.addProduct(0x0403, 0x6001, FtdiSerialDriver::class.java)
+        probeTable.addProduct(0x0403, 0x6010, FtdiSerialDriver::class.java)
+        probeTable.addProduct(0x0403, 0x6014, FtdiSerialDriver::class.java)
+        probeTable.addProduct(0x0403, 0x6015, FtdiSerialDriver::class.java)
         return UsbSerialProber(probeTable)
     }
 
@@ -217,6 +233,10 @@ class MotorHandler {
     }
 
     fun connect(context: Context? = null) {
+        if (isConnectedAndActive()) {
+            Log.d(TAG, "Motor already actively connected. Skipping redundant connection attempt.")
+            return
+        }
         disconnect()
 
         if (context != null) {
@@ -504,6 +524,11 @@ class MotorHandler {
                             val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
                             Log.d(TAG, "Motor USB Permission callback result: $granted")
                             if (granted) {
+                                try {
+                                    com.phidget22.usb.Manager.Initialize(c?.applicationContext ?: activityContext.applicationContext)
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "Re-initializing Phidgets USB manager after permission grant: ${e.message}")
+                                }
                                 connect(activityContext)
                             } else {
                                 _config.value = _config.value.copy(
