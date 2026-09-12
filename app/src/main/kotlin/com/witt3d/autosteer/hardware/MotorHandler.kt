@@ -87,11 +87,14 @@ class MotorHandler {
 
     fun isConnectedAndActive(): Boolean {
         if (!_config.value.isConnected) return false
+        if (_config.value.isSimulationMode || _config.value.motorType == MotorType.NONE_SIMULATED) {
+            return false
+        }
         if (_config.value.motorType == MotorType.PHIDGETS) {
             val motor = phidgetDcMotor ?: return false
             return try { motor.attached } catch (e: Exception) { false }
         }
-        return true
+        return usbPort != null || usbConnection != null
     }
 
     private fun registerUsbReceiver(context: Context) {
@@ -115,12 +118,16 @@ class MotorHandler {
 
     private fun getCustomMotorProber(): UsbSerialProber {
         val probeTable = UsbSerialProber.getDefaultProbeTable()
-        // Roboteq VIDs (0x20D1 / 8401, 0x0525 / 1317, 0x0B4D / 2893, 0x0483 / 1155, 0x0403 FTDI)
+        // Roboteq VIDs (0x20D1 / 8401, 0x20D2 / 8402, 0x0525 / 1317, 0x0B4D / 2893, 0x0483 / 1155, 0x0403 FTDI)
         // Add common Roboteq product IDs for both CDC ACM and FTDI drivers
         probeTable.addProduct(0x20D1, 0x5740, CdcAcmSerialDriver::class.java)
         probeTable.addProduct(0x20D1, 0x5741, CdcAcmSerialDriver::class.java)
         probeTable.addProduct(0x20D1, 0x0001, CdcAcmSerialDriver::class.java)
         probeTable.addProduct(0x20D1, 0x0002, CdcAcmSerialDriver::class.java)
+        probeTable.addProduct(0x20D2, 0x5740, CdcAcmSerialDriver::class.java)
+        probeTable.addProduct(0x20D2, 0x5741, CdcAcmSerialDriver::class.java)
+        probeTable.addProduct(0x20D2, 0x0001, CdcAcmSerialDriver::class.java)
+        probeTable.addProduct(0x20D2, 0x0002, CdcAcmSerialDriver::class.java)
         probeTable.addProduct(0x0525, 0xA4A7, CdcAcmSerialDriver::class.java)
         probeTable.addProduct(0x0525, 0xA4A8, CdcAcmSerialDriver::class.java)
         probeTable.addProduct(0x0B4D, 0x0001, CdcAcmSerialDriver::class.java)
@@ -199,11 +206,20 @@ class MotorHandler {
         if (currentType == MotorType.PHIDGETS) {
             val phidgetDevice = usbManager.deviceList.values.firstOrNull { isMotorDevice(it, MotorType.PHIDGETS) }
             if (phidgetDevice != null) {
+                val hasPerm = usbManager.hasPermission(phidgetDevice)
+                if (hasPerm) {
+                    isPermissionPending = false
+                }
+                val devName = "Phidget Motor Controller 1065_1B (${phidgetDevice.manufacturerName ?: "Phidgets"} - ${phidgetDevice.deviceName})"
                 _config.value = _config.value.copy(
                     usbDeviceDetected = true,
-                    usbDeviceName = "Phidget Motor Controller 1065_1B (${phidgetDevice.manufacturerName ?: "Phidgets"} - ${phidgetDevice.deviceName})"
+                    usbDeviceName = if (hasPerm) "$devName (Granted)" else "$devName (Permission Required)"
                 )
+                if (!hasPerm && !isPermissionPending && !(_config.value.isSimulationMode || currentType == MotorType.NONE_SIMULATED)) {
+                    requestUsbPermission(context, usbManager, phidgetDevice)
+                }
             } else {
+                isPermissionPending = false
                 _config.value = _config.value.copy(
                     usbDeviceDetected = false,
                     usbDeviceName = null
@@ -216,15 +232,22 @@ class MotorHandler {
 
         if (availableDrivers.isNotEmpty()) {
             val device = availableDrivers[0].device
+            val hasPerm = usbManager.hasPermission(device)
+            if (hasPerm) {
+                isPermissionPending = false
+            }
             val devName = when (device.vendorId) {
                 0x06C2 -> "Phidget Motor Controller 1065_1B (${device.manufacturerName ?: "Phidgets"} - ${device.deviceName})"
-                0x20D1, 0x0525, 0x0B4D, 0x0483 -> "Roboteq Motor Controller (${device.manufacturerName ?: "Roboteq"} - ${device.deviceName})"
+                0x20D1, 0x20D2, 0x0525, 0x0B4D, 0x0483 -> "Roboteq Motor Controller (${device.manufacturerName ?: "Roboteq"} - ${device.deviceName})"
                 else -> "Motor Controller (${device.deviceName})"
             }
             _config.value = _config.value.copy(
                 usbDeviceDetected = true,
-                usbDeviceName = devName
+                usbDeviceName = if (hasPerm) "$devName (Granted)" else "$devName (Permission Required)"
             )
+            if (!hasPerm && !isPermissionPending && !(_config.value.isSimulationMode || currentType == MotorType.NONE_SIMULATED)) {
+                requestUsbPermission(context, usbManager, device)
+            }
             return
         }
 
@@ -232,16 +255,24 @@ class MotorHandler {
         val matchedDevice = rawDevices.firstOrNull { isMotorDevice(it, currentType) }
 
         if (matchedDevice != null) {
+            val hasPerm = usbManager.hasPermission(matchedDevice)
+            if (hasPerm) {
+                isPermissionPending = false
+            }
             val devName = when (matchedDevice.vendorId) {
                 0x06C2 -> "Phidget Motor Controller 1065_1B (${matchedDevice.manufacturerName ?: "Phidgets"} - ${matchedDevice.deviceName})"
-                0x20D1, 0x0525 -> "Roboteq Motor Controller (${matchedDevice.manufacturerName ?: "Roboteq"} - ${matchedDevice.deviceName})"
+                0x20D1, 0x20D2, 0x0525 -> "Roboteq Motor Controller (${matchedDevice.manufacturerName ?: "Roboteq"} - ${matchedDevice.deviceName})"
                 else -> "Motor Controller (${matchedDevice.deviceName})"
             }
             _config.value = _config.value.copy(
                 usbDeviceDetected = true,
-                usbDeviceName = devName
+                usbDeviceName = if (hasPerm) "$devName (Granted)" else "$devName (Permission Required)"
             )
+            if (!hasPerm && !isPermissionPending && !(_config.value.isSimulationMode || currentType == MotorType.NONE_SIMULATED)) {
+                requestUsbPermission(context, usbManager, matchedDevice)
+            }
         } else {
+            isPermissionPending = false
             _config.value = _config.value.copy(
                 usbDeviceDetected = false,
                 usbDeviceName = null
@@ -845,7 +876,7 @@ class MotorHandler {
 
                     if (_config.value.motorType == MotorType.ROBOTEQ) {
                         val ch = _config.value.roboteqChannel
-                        val queryCmd = "?C $ch\r?A $ch\r?V\r?S $ch\r"
+                        val queryCmd = "?C $ch\r?A $ch\r?V\r?S $ch\r?T $ch\r"
                         port.write(queryCmd.toByteArray(Charsets.US_ASCII), 500)
                     }
 
@@ -927,33 +958,31 @@ class MotorHandler {
         val current = _telemetry.value
 
         try {
+            val cleanResp = response.trim()
             when {
-                response.startsWith("C=") -> {
-                    val count = response.substring(2).trim().toLongOrNull()
+                cleanResp.startsWith("C=") || cleanResp.startsWith("P=") -> {
+                    val rawStr = cleanResp.substring(2).trim()
+                    val count = parseFirstMetricValue(rawStr)?.toLong()
                     if (count != null) {
                         _telemetry.value = current.copy(encoderCount = count)
                     }
                 }
-                response.startsWith("P=") -> {
-                    val count = response.substring(2).trim().toLongOrNull()
-                    if (count != null) {
-                        _telemetry.value = current.copy(encoderCount = count)
-                    }
-                }
-                response.startsWith("A=") -> {
-                    val rawAmps = response.substring(2).trim().toDoubleOrNull()
+                cleanResp.startsWith("A=") -> {
+                    val rawStr = cleanResp.substring(2).trim()
+                    val rawAmps = parseFirstMetricValue(rawStr)
                     if (rawAmps != null) {
                         _telemetry.value = current.copy(currentAmps = rawAmps / 10.0)
                     }
                 }
-                response.startsWith("I=") -> {
-                    val amps = response.substring(2).trim().toDoubleOrNull()
+                cleanResp.startsWith("I=") -> {
+                    val rawStr = cleanResp.substring(2).trim()
+                    val amps = parseFirstMetricValue(rawStr)
                     if (amps != null) {
                         _telemetry.value = current.copy(currentAmps = amps)
                     }
                 }
-                response.startsWith("V=") -> {
-                    val rawStr = response.substring(2).trim()
+                cleanResp.startsWith("V=") -> {
+                    val rawStr = cleanResp.substring(2).trim()
                     if (rawStr.contains(":")) {
                         val parts = rawStr.split(":")
                         val volts = parts[0].toDoubleOrNull()
@@ -961,23 +990,39 @@ class MotorHandler {
                             _telemetry.value = current.copy(voltageVolts = volts / 10.0)
                         }
                     } else {
-                        val volts = rawStr.toDoubleOrNull()
+                        val volts = parseFirstMetricValue(rawStr)
                         if (volts != null) {
                             val actualVolts = if (volts > 50.0) volts / 10.0 else volts
                             _telemetry.value = current.copy(voltageVolts = actualVolts)
                         }
                     }
                 }
-                response.startsWith("S=") -> {
-                    val rpm = response.substring(2).trim().toIntOrNull()
+                cleanResp.startsWith("S=") -> {
+                    val rawStr = cleanResp.substring(2).trim()
+                    val rpm = parseFirstMetricValue(rawStr)?.toInt()
                     if (rpm != null) {
                         _telemetry.value = current.copy(speedRpm = rpm)
+                    }
+                }
+                cleanResp.startsWith("T=") -> {
+                    val rawStr = cleanResp.substring(2).trim()
+                    val tempC = parseFirstMetricValue(rawStr)
+                    if (tempC != null) {
+                        Log.d(TAG, "Roboteq controller temperature: ${tempC}°C")
                     }
                 }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error parsing telemetry response: $response", e)
         }
+    }
+
+    private fun parseFirstMetricValue(raw: String): Double? {
+        if (raw.contains(":")) {
+            val parts = raw.split(":")
+            return parts[0].toDoubleOrNull()
+        }
+        return raw.toDoubleOrNull()
     }
 
     private fun startSimulationMode() {
