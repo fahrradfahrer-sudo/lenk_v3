@@ -115,17 +115,51 @@ class MotorHandler {
 
     private fun getCustomMotorProber(): UsbSerialProber {
         val probeTable = UsbSerialProber.getDefaultProbeTable()
-        // Roboteq VIDs (0x20D1 / 8401, 0x0525 / 1317, 0x0403 FTDI)
+        // Roboteq VIDs (0x20D1 / 8401, 0x0525 / 1317, 0x0B4D / 2893, 0x0483 / 1155, 0x0403 FTDI)
         // Add common Roboteq product IDs for both CDC ACM and FTDI drivers
         probeTable.addProduct(0x20D1, 0x5740, CdcAcmSerialDriver::class.java)
         probeTable.addProduct(0x20D1, 0x5741, CdcAcmSerialDriver::class.java)
+        probeTable.addProduct(0x20D1, 0x0001, CdcAcmSerialDriver::class.java)
+        probeTable.addProduct(0x20D1, 0x0002, CdcAcmSerialDriver::class.java)
         probeTable.addProduct(0x0525, 0xA4A7, CdcAcmSerialDriver::class.java)
         probeTable.addProduct(0x0525, 0xA4A8, CdcAcmSerialDriver::class.java)
+        probeTable.addProduct(0x0B4D, 0x0001, CdcAcmSerialDriver::class.java)
+        probeTable.addProduct(0x0B4D, 0x0002, CdcAcmSerialDriver::class.java)
+        probeTable.addProduct(0x0483, 0x5740, CdcAcmSerialDriver::class.java)
+        probeTable.addProduct(0x0483, 0x5741, CdcAcmSerialDriver::class.java)
         probeTable.addProduct(0x0403, 0x6001, FtdiSerialDriver::class.java)
         probeTable.addProduct(0x0403, 0x6010, FtdiSerialDriver::class.java)
         probeTable.addProduct(0x0403, 0x6014, FtdiSerialDriver::class.java)
         probeTable.addProduct(0x0403, 0x6015, FtdiSerialDriver::class.java)
         return UsbSerialProber(probeTable)
+    }
+
+    private fun findMotorDrivers(usbManager: UsbManager, motorType: MotorType): List<com.hoho.android.usbserial.driver.UsbSerialDriver> {
+        val customProber = getCustomMotorProber()
+        val defaultProber = UsbSerialProber.getDefaultProber()
+
+        val drivers = mutableListOf<com.hoho.android.usbserial.driver.UsbSerialDriver>()
+        drivers.addAll(customProber.findAllDrivers(usbManager).filter { isMotorDevice(it.device, motorType) })
+        drivers.addAll(defaultProber.findAllDrivers(usbManager).filter { isMotorDevice(it.device, motorType) })
+
+        if (drivers.isEmpty()) {
+            val matchedDevice = usbManager.deviceList.values.firstOrNull { isMotorDevice(it, motorType) }
+            if (matchedDevice != null) {
+                try {
+                    val driver = if (matchedDevice.vendorId == 0x0403) {
+                        FtdiSerialDriver(matchedDevice)
+                    } else {
+                        CdcAcmSerialDriver(matchedDevice)
+                    }
+                    if (driver.ports.isNotEmpty()) {
+                        drivers.add(driver)
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Dynamic serial driver creation failed for ${matchedDevice.deviceName}: ${e.message}")
+                }
+            }
+        }
+        return drivers.distinctBy { it.device.deviceId }
     }
 
     private fun isMotorDevice(device: UsbDevice, targetMotorType: MotorType): Boolean {
@@ -135,9 +169,9 @@ class MotorHandler {
             return false
         }
         return when (targetMotorType) {
-            MotorType.ROBOTEQ -> vid == 0x20D1 || vid == 0x0525 || vid == 0x0403
+            MotorType.ROBOTEQ -> vid == 0x20D1 || vid == 0x0525 || vid == 0x0B4D || vid == 0x0403 || vid == 0x0483 || vid == 0x10C4 || vid == 0x067B
             MotorType.PHIDGETS -> vid == 0x06C2
-            MotorType.NONE_SIMULATED -> vid == 0x20D1 || vid == 0x0525 || vid == 0x06C2 || vid == 0x0403
+            MotorType.NONE_SIMULATED -> vid == 0x20D1 || vid == 0x0525 || vid == 0x0B4D || vid == 0x06C2 || vid == 0x0403 || vid == 0x0483 || vid == 0x10C4 || vid == 0x067B
         }
     }
 
@@ -178,14 +212,13 @@ class MotorHandler {
             return
         }
 
-        val prober = getCustomMotorProber()
-        val availableDrivers = prober.findAllDrivers(usbManager).filter { isMotorDevice(it.device, currentType) }
+        val availableDrivers = findMotorDrivers(usbManager, currentType)
 
         if (availableDrivers.isNotEmpty()) {
             val device = availableDrivers[0].device
             val devName = when (device.vendorId) {
                 0x06C2 -> "Phidget Motor Controller 1065_1B (${device.manufacturerName ?: "Phidgets"} - ${device.deviceName})"
-                0x20D1, 0x0525 -> "Roboteq Motor Controller (${device.manufacturerName ?: "Roboteq"} - ${device.deviceName})"
+                0x20D1, 0x0525, 0x0B4D, 0x0483 -> "Roboteq Motor Controller (${device.manufacturerName ?: "Roboteq"} - ${device.deviceName})"
                 else -> "Motor Controller (${device.deviceName})"
             }
             _config.value = _config.value.copy(
@@ -288,8 +321,7 @@ class MotorHandler {
         }
 
         val usbManager = activeContext.getSystemService(Context.USB_SERVICE) as UsbManager
-        val prober = getCustomMotorProber()
-        val availableDrivers = prober.findAllDrivers(usbManager).filter { isMotorDevice(it.device, currentConfig.motorType) }
+        val availableDrivers = findMotorDrivers(usbManager, currentConfig.motorType)
 
         if (availableDrivers.isNotEmpty()) {
             val driver = availableDrivers[0]
