@@ -21,14 +21,14 @@ class MotorHandlerTest {
 
         val updated = defaultConfig.copy(
             motorType = MotorType.ROBOTEQ,
-            roboteqChannel = 2,
+            roboteqChannel = 3, // Dual Mode
             invertDirection = true,
             maxPowerLimitPercent = 80
         )
         handler.updateConfig(updated)
 
         assertEquals(MotorType.ROBOTEQ, handler.config.value.motorType)
-        assertEquals(2, handler.config.value.roboteqChannel)
+        assertEquals(3, handler.config.value.roboteqChannel)
         assertTrue(handler.config.value.invertDirection)
         assertEquals(80, handler.config.value.maxPowerLimitPercent)
     }
