@@ -40,7 +40,6 @@ fun SettingsScreen(viewModel: MainViewModel = viewModel()) {
     var baudRateText by remember(gpsConfig.baudRate) { mutableStateOf(gpsConfig.baudRate.toString()) }
 
     // State for Motor text fields
-    var roboteqChannelText by remember(motorConfig.roboteqChannel) { mutableStateOf(motorConfig.roboteqChannel.toString()) }
     var roboteqBaudText by remember(motorConfig.roboteqBaudRate) { mutableStateOf(motorConfig.roboteqBaudRate.toString()) }
     var phidgetChannelText by remember(motorConfig.phidgetChannel) { mutableStateOf(motorConfig.phidgetChannel.toString()) }
     var phidgetSerialText by remember(motorConfig.phidgetSerialNumber) { mutableStateOf(motorConfig.phidgetSerialNumber.toString()) }
@@ -840,33 +839,39 @@ fun SettingsScreen(viewModel: MainViewModel = viewModel()) {
 
                 // Roboteq Specific Settings
                 if (motorConfig.motorType == MotorType.ROBOTEQ) {
+                    Text("Roboteq Channel Selection:", style = MaterialTheme.typography.titleMedium)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        OutlinedTextField(
-                            value = roboteqChannelText,
-                            onValueChange = {
-                                roboteqChannelText = it
-                                it.toIntOrNull()?.let { ch ->
-                                    viewModel.updateMotorConfig(context, motorConfig.copy(roboteqChannel = ch))
-                                }
-                            },
-                            label = { Text("Roboteq Channel") },
-                            modifier = Modifier.weight(1f)
+                        FilterChip(
+                            selected = motorConfig.roboteqChannel == 1,
+                            onClick = { viewModel.updateMotorConfig(context, motorConfig.copy(roboteqChannel = 1)) },
+                            label = { Text("Channel 1") }
                         )
-                        OutlinedTextField(
-                            value = roboteqBaudText,
-                            onValueChange = {
-                                roboteqBaudText = it
-                                it.toIntOrNull()?.let { baud ->
-                                    viewModel.updateMotorConfig(context, motorConfig.copy(roboteqBaudRate = baud))
-                                }
-                            },
-                            label = { Text("Baud Rate") },
-                            modifier = Modifier.weight(1f)
+                        FilterChip(
+                            selected = motorConfig.roboteqChannel == 2,
+                            onClick = { viewModel.updateMotorConfig(context, motorConfig.copy(roboteqChannel = 2)) },
+                            label = { Text("Channel 2") }
+                        )
+                        FilterChip(
+                            selected = motorConfig.roboteqChannel == 3,
+                            onClick = { viewModel.updateMotorConfig(context, motorConfig.copy(roboteqChannel = 3)) },
+                            label = { Text("Dual Mode (Ch 1 + 2)") }
                         )
                     }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = roboteqBaudText,
+                        onValueChange = {
+                            roboteqBaudText = it
+                            it.toIntOrNull()?.let { baud ->
+                                viewModel.updateMotorConfig(context, motorConfig.copy(roboteqBaudRate = baud))
+                            }
+                        },
+                        label = { Text("Baud Rate") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
                     Spacer(modifier = Modifier.height(8.dp))
                 }
 

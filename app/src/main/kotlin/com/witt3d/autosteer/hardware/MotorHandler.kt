@@ -176,9 +176,9 @@ class MotorHandler {
             return false
         }
         return when (targetMotorType) {
-            MotorType.ROBOTEQ -> vid == 0x20D1 || vid == 0x0525 || vid == 0x0B4D || vid == 0x0403 || vid == 0x0483 || vid == 0x10C4 || vid == 0x067B
+            MotorType.ROBOTEQ -> vid == 0x20D1 || vid == 0x20D2 || vid == 0x0525 || vid == 0x0B4D || vid == 0x0403 || vid == 0x0483 || vid == 0x10C4 || vid == 0x067B
             MotorType.PHIDGETS -> vid == 0x06C2
-            MotorType.NONE_SIMULATED -> vid == 0x20D1 || vid == 0x0525 || vid == 0x0B4D || vid == 0x06C2 || vid == 0x0403 || vid == 0x0483 || vid == 0x10C4 || vid == 0x067B
+            MotorType.NONE_SIMULATED -> vid == 0x20D1 || vid == 0x20D2 || vid == 0x0525 || vid == 0x0B4D || vid == 0x06C2 || vid == 0x0403 || vid == 0x0483 || vid == 0x10C4 || vid == 0x067B
         }
     }
 
@@ -876,7 +876,11 @@ class MotorHandler {
 
                     if (_config.value.motorType == MotorType.ROBOTEQ) {
                         val ch = _config.value.roboteqChannel
-                        val queryCmd = "?C $ch\r?A $ch\r?V\r?S $ch\r?T $ch\r"
+                        val queryCmd = if (ch == 3) {
+                            "?C\r?A\r?V\r?S\r?T\r"
+                        } else {
+                            "?C $ch\r?A $ch\r?V\r?S $ch\r?T $ch\r"
+                        }
                         port.write(queryCmd.toByteArray(Charsets.US_ASCII), 500)
                     }
 
@@ -918,7 +922,11 @@ class MotorHandler {
         val maxLimitRatio = (config.maxPowerLimitPercent.coerceIn(0, 100) / 100.0f)
         val scaledPower = (effectivePowerPercent * maxLimitRatio * 10.0f).roundToInt().coerceIn(-1000, 1000)
 
-        val command = "!G ${config.roboteqChannel} $scaledPower\r"
+        val command = if (config.roboteqChannel == 3) {
+            "!G 1 $scaledPower\r!G 2 $scaledPower\r"
+        } else {
+            "!G ${config.roboteqChannel} $scaledPower\r"
+        }
         scope.launch {
             try {
                 port.write(command.toByteArray(Charsets.US_ASCII), 200)
