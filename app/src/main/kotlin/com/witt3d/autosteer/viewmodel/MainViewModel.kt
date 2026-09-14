@@ -13,6 +13,7 @@ import com.witt3d.autosteer.data.models.NtripConfig
 import com.witt3d.autosteer.data.models.SteeringConfig
 import com.witt3d.autosteer.data.models.TelemetryData
 import com.witt3d.autosteer.data.models.TractorConfig
+import com.witt3d.autosteer.data.models.TerminalLogEntry
 import com.witt3d.autosteer.data.models.UtmPoint
 import com.witt3d.autosteer.data.repository.GpsRepository
 import com.witt3d.autosteer.data.repository.HardwareRepository
@@ -35,16 +36,20 @@ class MainViewModel : ViewModel() {
 
     val imuHandler = HardwareRepository.imuHandler
     val imuConfig: StateFlow<ImuConfig> = imuHandler.config
+    val imuTerminalLogs: StateFlow<List<TerminalLogEntry>> = imuHandler.terminalLogs
 
     val gpsHandler = HardwareRepository.gpsHandler
     val gpsConfig: StateFlow<GpsConfig> = gpsHandler.config
+    val gpsTerminalLogs: StateFlow<List<TerminalLogEntry>> = gpsHandler.terminalLogs
 
     val ntripClient = HardwareRepository.ntripClient
     val ntripConfig: StateFlow<NtripConfig> = ntripClient.config
+    val ntripTerminalLogs: StateFlow<List<TerminalLogEntry>> = ntripClient.terminalLogs
 
     val motorHandler = HardwareRepository.motorHandler
     val motorConfig: StateFlow<MotorConfig> = motorHandler.config
     val motorTelemetry: StateFlow<MotorTelemetry> = motorHandler.telemetry
+    val motorTerminalLogs: StateFlow<List<TerminalLogEntry>> = motorHandler.terminalLogs
 
     // Tractor & Steering Configuration State
     private val _tractorConfig = MutableStateFlow(TractorConfig())
@@ -289,6 +294,19 @@ class MainViewModel : ViewModel() {
     fun disconnectMotor() {
         motorHandler.disconnect()
     }
+
+    // Terminal Commands
+    fun sendImuCommand(command: String) = imuHandler.sendCustomCommand(command)
+    fun clearImuTerminal() = imuHandler.clearTerminalLogs()
+
+    fun sendGpsCommand(command: String) = gpsHandler.sendCustomCommand(command)
+    fun clearGpsTerminal() = gpsHandler.clearTerminalLogs()
+
+    fun sendNtripCommand(command: String) = ntripClient.sendCustomCommand(command)
+    fun clearNtripTerminal() = ntripClient.clearTerminalLogs()
+
+    fun sendMotorCommand(command: String) = motorHandler.sendCustomCommand(command)
+    fun clearMotorTerminal() = motorHandler.clearTerminalLogs()
 
     fun setMotorTargetPowerPercent(powerPercent: Float) {
         motorHandler.setTargetPowerPercent(powerPercent)

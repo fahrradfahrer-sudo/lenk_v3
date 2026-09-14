@@ -5,6 +5,8 @@ import android.util.Log
 import com.witt3d.autosteer.data.models.NtripConfig
 import com.witt3d.autosteer.data.models.NtripProfile
 import com.witt3d.autosteer.data.models.NtripStreamStats
+import com.witt3d.autosteer.data.models.TerminalLogDirection
+import com.witt3d.autosteer.data.models.TerminalLogEntry
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -25,6 +27,47 @@ class NtripClient(
 
     private val _config = MutableStateFlow(NtripConfig())
     val config: StateFlow<NtripConfig> = _config.asStateFlow()
+
+    private val _terminalLogs = MutableStateFlow<List<TerminalLogEntry>>(emptyList())
+    val terminalLogs: StateFlow<List<TerminalLogEntry>> = _terminalLogs.asStateFlow()
+
+    private fun logTerminal(direction: TerminalLogDirection, message: String) {
+        val entry = TerminalLogEntry(direction = direction, message = message)
+        val current = _terminalLogs.value.toMutableList()
+        current.add(entry)
+        if (current.size > 200) {
+            current.removeAt(0)
+        }
+        _terminalLogs.value = current
+    }
+
+    fun clearTerminalLogs() {
+        _terminalLogs.value = emptyList()
+    }
+
+    fun sendCustomCommand(command: String) {
+        val trimmed = command.trim()
+        if (trimmed.isEmpty()) return
+        logTerminal(TerminalLogDirection.TX, trimmed)
+
+        val out = activeOutputStream
+        if (out != null && _config.value.isConnected) {
+            scope.launch {
+                try {
+                    val formatted = if (trimmed.endsWith("\r\n")) trimmed else "$trimmed\r\n"
+                    val bytes = formatted.toByteArray(Charsets.US_ASCII)
+                    out.write(bytes)
+                    out.flush()
+                    txBytesCurrentSec.addAndGet(bytes.size.toLong())
+                    totalTxBytes.addAndGet(bytes.size.toLong())
+                } catch (e: Exception) {
+                    logTerminal(TerminalLogDirection.ERROR, "TX Fail: ${e.message}")
+                }
+            }
+        } else {
+            logTerminal(TerminalLogDirection.ERROR, "Cannot send command: NTRIP caster not connected")
+        }
+    }
 
     private var activeSocket: Socket? = null
     private var activeOutputStream: OutputStream? = null
@@ -173,12 +216,17 @@ class NtripClient(
             outputStream.write(reqBytes)
             outputStream.flush()
 
+            logTerminal(TerminalLogDirection.TX, "GET /${profile.mountpoint} HTTP/1.0 (Host: ${profile.host}:${profile.port})")
+
             txBytesCurrentSec.addAndGet(reqBytes.size.toLong())
             totalTxBytes.addAndGet(reqBytes.size.toLong())
 
             // Read response headers
             val responseLine = readLine(inputStream)
             Log.d(TAG, "NTRIP Response: $responseLine")
+            if (responseLine != null) {
+                logTerminal(TerminalLogDirection.RX, responseLine)
+            }
 
             if (responseLine == null || (!responseLine.contains("200 OK") && !responseLine.contains("ICY 200"))) {
                 throw Exception("NTRIP Server response: $responseLine")
@@ -195,6 +243,7 @@ class NtripClient(
                 activeProfileId = profile.id,
                 errorMessage = null
             )
+            logTerminal(TerminalLogDirection.INFO, "Connected to NTRIP Caster (${profile.name}: ${profile.host}:${profile.port}/${profile.mountpoint})")
 
             // Buffer for RTCM binary stream
             val buffer = ByteArray(4096)
@@ -244,6 +293,7 @@ class NtripClient(
                                 totalTxBytes.addAndGet(bytes.size.toLong())
 
                                 Log.d(TAG, "Sent NMEA GGA to NTRIP caster: $gga")
+                                logTerminal(TerminalLogDirection.TX, gga)
                             } catch (e: Exception) {
                                 Log.e(TAG, "Failed to send GGA to NTRIP caster", e)
                             }

@@ -64,6 +64,26 @@ class MotorHandlerTest {
     }
 
     @Test
+    fun testTerminalLogsAndCustomCommands() {
+        val handler = MotorHandler()
+        handler.updateConfig(MotorConfig(motorType = MotorType.ROBOTEQ))
+        assertEquals(0, handler.terminalLogs.value.size)
+
+        handler.sendCustomCommand("?C 1")
+        val logsAfterCmd = handler.terminalLogs.value
+        assertTrue(logsAfterCmd.isNotEmpty())
+        assertEquals("?C 1", logsAfterCmd.first().message)
+
+        handler.parseHardwareTelemetryResponse("C=54321")
+        val logsAfterRx = handler.terminalLogs.value
+        assertEquals("C=54321", logsAfterRx.last().message)
+        assertEquals(54321L, handler.telemetry.value.encoderCount)
+
+        handler.clearTerminalLogs()
+        assertEquals(0, handler.terminalLogs.value.size)
+    }
+
+    @Test
     fun testHardwareTelemetryParsing() {
         val handler = MotorHandler()
 

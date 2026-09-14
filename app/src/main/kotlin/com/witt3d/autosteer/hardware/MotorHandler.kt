@@ -15,6 +15,8 @@ import com.hoho.android.usbserial.driver.UsbSerialProber
 import com.witt3d.autosteer.data.models.MotorConfig
 import com.witt3d.autosteer.data.models.MotorTelemetry
 import com.witt3d.autosteer.data.models.MotorType
+import com.witt3d.autosteer.data.models.TerminalLogDirection
+import com.witt3d.autosteer.data.models.TerminalLogEntry
 import com.witt3d.autosteer.data.repository.MotorRepository
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -33,6 +35,47 @@ class MotorHandler {
 
     private val _telemetry = MutableStateFlow(MotorTelemetry())
     val telemetry: StateFlow<MotorTelemetry> = _telemetry.asStateFlow()
+
+    private val _terminalLogs = MutableStateFlow<List<TerminalLogEntry>>(emptyList())
+    val terminalLogs: StateFlow<List<TerminalLogEntry>> = _terminalLogs.asStateFlow()
+
+    private fun logTerminal(direction: TerminalLogDirection, message: String) {
+        val entry = TerminalLogEntry(direction = direction, message = message)
+        val current = _terminalLogs.value.toMutableList()
+        current.add(entry)
+        if (current.size > 200) {
+            current.removeAt(0)
+        }
+        _terminalLogs.value = current
+    }
+
+    fun clearTerminalLogs() {
+        _terminalLogs.value = emptyList()
+    }
+
+    fun sendCustomCommand(command: String) {
+        val trimmed = command.trim()
+        if (trimmed.isEmpty()) return
+        logTerminal(TerminalLogDirection.TX, trimmed)
+
+        if (_config.value.motorType == MotorType.ROBOTEQ) {
+            val port = usbPort
+            if (port != null && _config.value.isConnected) {
+                scope.launch {
+                    try {
+                        val formatted = if (trimmed.endsWith("\r") || trimmed.endsWith("\n")) trimmed else "$trimmed\r"
+                        port.write(formatted.toByteArray(Charsets.US_ASCII), 500)
+                    } catch (e: Exception) {
+                        logTerminal(TerminalLogDirection.ERROR, "TX Fail: ${e.message}")
+                    }
+                }
+            } else {
+                logTerminal(TerminalLogDirection.ERROR, "Cannot send command: Motor not connected")
+            }
+        } else {
+            logTerminal(TerminalLogDirection.INFO, "Custom command ignored for ${_config.value.motorType.name}")
+        }
+    }
 
     private var usbPort: UsbSerialPort? = null
     private var usbConnection: UsbDeviceConnection? = null
@@ -373,6 +416,12 @@ class MotorHandler {
                 val port = driver.ports[0]
                 port.open(connection)
                 port.setParameters(baud, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
+                try {
+                    port.dtr = true
+                    port.rts = true
+                } catch (e: Exception) {
+                    Log.w(TAG, "Could not set DTR/RTS lines: ${e.message}")
+                }
                 usbPort = port
 
                 _config.value = currentConfig.copy(
@@ -386,6 +435,8 @@ class MotorHandler {
                     isConnected = true,
                     statusMessage = "Connected to ${currentConfig.motorType.name}"
                 )
+
+                logTerminal(TerminalLogDirection.INFO, "Connected to ${currentConfig.motorType.name} via USB Serial (${device.deviceName})")
 
                 startHardwareCommunicationLoop()
                 return
@@ -930,9 +981,11 @@ class MotorHandler {
         scope.launch {
             try {
                 port.write(command.toByteArray(Charsets.US_ASCII), 200)
+                logTerminal(TerminalLogDirection.TX, command.trim())
                 _telemetry.value = _telemetry.value.copy(actualPowerPercent = effectivePowerPercent * maxLimitRatio)
             } catch (e: Exception) {
                 Log.e(TAG, "Error sending Roboteq command", e)
+                logTerminal(TerminalLogDirection.ERROR, "TX Fail: ${e.message}")
             }
         }
     }
@@ -967,6 +1020,9 @@ class MotorHandler {
 
         try {
             val cleanResp = response.trim()
+            if (cleanResp.isNotEmpty()) {
+                logTerminal(TerminalLogDirection.RX, cleanResp)
+            }
             when {
                 cleanResp.startsWith("C=") || cleanResp.startsWith("P=") -> {
                     val rawStr = cleanResp.substring(2).trim()

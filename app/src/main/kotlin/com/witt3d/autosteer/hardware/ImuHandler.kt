@@ -15,6 +15,8 @@ import com.tinkerforge.BrickIMUV2
 import com.tinkerforge.IPConnection
 import com.witt3d.autosteer.data.models.ImuConfig
 import com.witt3d.autosteer.data.models.TelemetryData
+import com.witt3d.autosteer.data.models.TerminalLogDirection
+import com.witt3d.autosteer.data.models.TerminalLogEntry
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -34,6 +36,30 @@ class ImuHandler {
 
     private val _telemetry = MutableStateFlow(TelemetryData())
     val telemetry: StateFlow<TelemetryData> = _telemetry.asStateFlow()
+
+    private val _terminalLogs = MutableStateFlow<List<TerminalLogEntry>>(emptyList())
+    val terminalLogs: StateFlow<List<TerminalLogEntry>> = _terminalLogs.asStateFlow()
+
+    private fun logTerminal(direction: TerminalLogDirection, message: String) {
+        val entry = TerminalLogEntry(direction = direction, message = message)
+        val current = _terminalLogs.value.toMutableList()
+        current.add(entry)
+        if (current.size > 200) {
+            current.removeAt(0)
+        }
+        _terminalLogs.value = current
+    }
+
+    fun clearTerminalLogs() {
+        _terminalLogs.value = emptyList()
+    }
+
+    fun sendCustomCommand(command: String) {
+        val trimmed = command.trim()
+        if (trimmed.isEmpty()) return
+        logTerminal(TerminalLogDirection.TX, trimmed)
+        logTerminal(TerminalLogDirection.INFO, "Custom command ignored for Tinkerforge IMU Brick v2")
+    }
 
     private var simulationJob: Job? = null
     private var usbDirectJob: Job? = null
@@ -317,6 +343,7 @@ class ImuHandler {
         }
 
         Log.d(TAG, "Direct Native USB Bulk Transfer connection established to IMU Brick v2")
+        logTerminal(TerminalLogDirection.INFO, "Direct Native USB Bulk Transfer connection established to IMU Brick v2")
 
         // Build 'Set Orientation Period' packet (Function ID 22, Period = 50ms)
         val periodPacket = ByteBuffer.allocate(12).order(ByteOrder.LITTLE_ENDIAN).apply {
@@ -580,6 +607,7 @@ class ImuHandler {
             }
 
             Log.d(TAG, "IMU Brick v2 initialized with UID: $uid")
+            logTerminal(TerminalLogDirection.INFO, "IMU Brick v2 initialized via IPConnection with UID: $uid")
         } catch (e: Exception) {
             val errorMsg = "Failed to setup BrickIMUV2 ($uid): ${e.localizedMessage ?: e.message}"
             Log.e(TAG, "Failed to initialize BrickIMUV2 with UID: $uid", e)
