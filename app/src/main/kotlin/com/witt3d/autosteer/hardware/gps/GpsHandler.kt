@@ -14,6 +14,8 @@ import com.hoho.android.usbserial.driver.UsbSerialProber
 import com.witt3d.autosteer.data.models.GpsConfig
 import com.witt3d.autosteer.data.models.GpsFixStatus
 import com.witt3d.autosteer.data.models.TelemetryData
+import com.witt3d.autosteer.data.models.TerminalLogDirection
+import com.witt3d.autosteer.data.models.TerminalLogEntry
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -32,6 +34,43 @@ class GpsHandler {
 
     private val _lastRawGga = MutableStateFlow<String?>(null)
     val lastRawGga: StateFlow<String?> = _lastRawGga.asStateFlow()
+
+    private val _terminalLogs = MutableStateFlow<List<TerminalLogEntry>>(emptyList())
+    val terminalLogs: StateFlow<List<TerminalLogEntry>> = _terminalLogs.asStateFlow()
+
+    private fun logTerminal(direction: TerminalLogDirection, message: String) {
+        val entry = TerminalLogEntry(direction = direction, message = message)
+        val current = _terminalLogs.value.toMutableList()
+        current.add(entry)
+        if (current.size > 200) {
+            current.removeAt(0)
+        }
+        _terminalLogs.value = current
+    }
+
+    fun clearTerminalLogs() {
+        _terminalLogs.value = emptyList()
+    }
+
+    fun sendCustomCommand(command: String) {
+        val trimmed = command.trim()
+        if (trimmed.isEmpty()) return
+        logTerminal(TerminalLogDirection.TX, trimmed)
+
+        val port = usbPort
+        if (port != null && _config.value.isConnected) {
+            scope.launch {
+                try {
+                    val formatted = if (trimmed.endsWith("\r") || trimmed.endsWith("\n")) trimmed else "$trimmed\r\n"
+                    port.write(formatted.toByteArray(Charsets.US_ASCII), 500)
+                } catch (e: Exception) {
+                    logTerminal(TerminalLogDirection.ERROR, "TX Fail: ${e.message}")
+                }
+            }
+        } else {
+            logTerminal(TerminalLogDirection.ERROR, "Cannot send command: GPS not connected")
+        }
+    }
 
     private val parser = NmeaParser()
     private var usbPort: UsbSerialPort? = null
@@ -99,7 +138,8 @@ class GpsHandler {
 
     private fun isGpsDevice(device: UsbDevice): Boolean {
         val vid = device.vendorId
-        if (vid == 0x06C2 || vid == 1730 || vid == 0x20D1 || vid == 8401 || vid == 0x0525 || vid == 1317 || vid == 0x16D0 || vid == 5840) {
+        // NEVER match Phidgets, Roboteq, or Tinkerforge devices
+        if (vid == 0x06C2 || vid == 1730 || vid == 0x20D1 || vid == 8401 || vid == 0x20D2 || vid == 8402 || vid == 0x0525 || vid == 1317 || vid == 0x0B4D || vid == 2893 || vid == 0x16D0 || vid == 5840) {
             return false
         }
         return vid == 0x1546 || vid == 5446 || vid == 0x1A86 || vid == 6790 || vid == 0x4348 || vid == 0x0403 || vid == 0x10C4 || vid == 0x067B
@@ -280,6 +320,8 @@ class GpsHandler {
                     errorMessage = null
                 )
 
+                logTerminal(TerminalLogDirection.INFO, "Connected to GPS Receiver (${device.deviceName})")
+
                 val buffer = ByteArray(2048)
                 val sb = StringBuilder()
 
@@ -316,8 +358,10 @@ class GpsHandler {
         scope.launch {
             try {
                 port.write(data, 1000)
+                logTerminal(TerminalLogDirection.TX, "Injected RTCM data (${data.size} bytes)")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to write RTCM data to u-blox serial port", e)
+                logTerminal(TerminalLogDirection.ERROR, "RTCM injection error: ${e.message}")
             }
         }
     }
@@ -342,6 +386,9 @@ class GpsHandler {
     }
 
     private fun processNmeaLine(line: String) {
+        if (line.isNotEmpty()) {
+            logTerminal(TerminalLogDirection.RX, line)
+        }
         val parsed = parser.parseSentence(line) ?: return
         parsed.rawGga?.let { gga ->
             _lastRawGga.value = gga

@@ -13,6 +13,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.witt3d.autosteer.data.models.MotorControlMode
 import com.witt3d.autosteer.data.models.MotorType
 import com.witt3d.autosteer.data.models.SteeringAlgorithm
+import com.witt3d.autosteer.ui.components.DropdownTerminal
 import com.witt3d.autosteer.ui.components.ImuVisualizer3D
 import com.witt3d.autosteer.viewmodel.MainViewModel
 
@@ -21,10 +22,14 @@ fun SettingsScreen(viewModel: MainViewModel = viewModel()) {
     val context = LocalContext.current
     val telemetry by viewModel.telemetry.collectAsState()
     val imuConfig by viewModel.imuConfig.collectAsState()
+    val imuTerminalLogs by viewModel.imuTerminalLogs.collectAsState()
     val gpsConfig by viewModel.gpsConfig.collectAsState()
+    val gpsTerminalLogs by viewModel.gpsTerminalLogs.collectAsState()
     val ntripConfig by viewModel.ntripConfig.collectAsState()
+    val ntripTerminalLogs by viewModel.ntripTerminalLogs.collectAsState()
     val motorConfig by viewModel.motorConfig.collectAsState()
     val motorTelemetry by viewModel.motorTelemetry.collectAsState()
+    val motorTerminalLogs by viewModel.motorTerminalLogs.collectAsState()
     val tractorConfig by viewModel.tractorConfig.collectAsState()
     val steeringConfig by viewModel.steeringConfig.collectAsState()
     val guidanceState by viewModel.guidanceState.collectAsState()
@@ -564,6 +569,15 @@ fun SettingsScreen(viewModel: MainViewModel = viewModel()) {
                         valueRange = -5f..5f
                     )
                 }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                DropdownTerminal(
+                    title = "IMU Terminal / Traffic Log",
+                    logs = imuTerminalLogs,
+                    onSendCommand = { viewModel.sendImuCommand(it) },
+                    onClearLogs = { viewModel.clearImuTerminal() }
+                )
             }
         }
 
@@ -651,6 +665,15 @@ fun SettingsScreen(viewModel: MainViewModel = viewModel()) {
                         }
                     )
                 }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                DropdownTerminal(
+                    title = "GPS Terminal / Traffic Log",
+                    logs = gpsTerminalLogs,
+                    onSendCommand = { viewModel.sendGpsCommand(it) },
+                    onClearLogs = { viewModel.clearGpsTerminal() }
+                )
             }
         }
 
@@ -757,6 +780,15 @@ fun SettingsScreen(viewModel: MainViewModel = viewModel()) {
                         }
                     )
                 }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                DropdownTerminal(
+                    title = "NTRIP Terminal / Traffic Log",
+                    logs = ntripTerminalLogs,
+                    onSendCommand = { viewModel.sendNtripCommand(it) },
+                    onClearLogs = { viewModel.clearNtripTerminal() }
+                )
             }
         }
 
@@ -1061,6 +1093,15 @@ fun SettingsScreen(viewModel: MainViewModel = viewModel()) {
                         }
                     }
                 }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                DropdownTerminal(
+                    title = "Motor Controller Terminal / Traffic Log",
+                    logs = motorTerminalLogs,
+                    onSendCommand = { viewModel.sendMotorCommand(it) },
+                    onClearLogs = { viewModel.clearMotorTerminal() }
+                )
             }
         }
     }
