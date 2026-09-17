@@ -46,6 +46,7 @@ fun SettingsScreen(viewModel: MainViewModel = viewModel()) {
 
     // State for Motor text fields
     var roboteqBaudText by remember(motorConfig.roboteqBaudRate) { mutableStateOf(motorConfig.roboteqBaudRate.toString()) }
+    var roboteqFreqText by remember(motorConfig.commandLoopFrequencyHz) { mutableStateOf(motorConfig.commandLoopFrequencyHz.toString()) }
     var phidgetChannelText by remember(motorConfig.phidgetChannel) { mutableStateOf(motorConfig.phidgetChannel.toString()) }
     var phidgetSerialText by remember(motorConfig.phidgetSerialNumber) { mutableStateOf(motorConfig.phidgetSerialNumber.toString()) }
     var phidgetAccelText by remember(motorConfig.phidgetAcceleration) { mutableStateOf(motorConfig.phidgetAcceleration.toString()) }
@@ -893,17 +894,34 @@ fun SettingsScreen(viewModel: MainViewModel = viewModel()) {
                         )
                     }
                     Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = roboteqBaudText,
-                        onValueChange = {
-                            roboteqBaudText = it
-                            it.toIntOrNull()?.let { baud ->
-                                viewModel.updateMotorConfig(context, motorConfig.copy(roboteqBaudRate = baud))
-                            }
-                        },
-                        label = { Text("Baud Rate") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = roboteqBaudText,
+                            onValueChange = {
+                                roboteqBaudText = it
+                                it.toIntOrNull()?.let { baud ->
+                                    viewModel.updateMotorConfig(context, motorConfig.copy(roboteqBaudRate = baud))
+                                }
+                            },
+                            label = { Text("Baud Rate") },
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = roboteqFreqText,
+                            onValueChange = {
+                                roboteqFreqText = it
+                                it.toIntOrNull()?.let { freq ->
+                                    val clamped = freq.coerceIn(1, 50)
+                                    viewModel.updateMotorConfig(context, motorConfig.copy(commandLoopFrequencyHz = clamped))
+                                }
+                            },
+                            label = { Text("Loop Freq (Hz)") },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
                     Spacer(modifier = Modifier.height(8.dp))
                 }
 
