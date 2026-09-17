@@ -113,6 +113,12 @@ class MotorHandlerTest {
         handler.parseHardwareTelemetryResponse("S=1800")
         assertEquals(1800, handler.telemetry.value.speedRpm)
 
+        // Test Roboteq Temperature acknowledgment / parsing
+        handler.parseHardwareTelemetryResponse("T=35:38")
+        // Verify RX log entry was captured in terminal
+        val rxLogs = handler.terminalLogs.value
+        assertEquals("T=35:38", rxLogs.last().message)
+
         // Test Phidgets Encoder & Current & Voltage
         handler.parseHardwareTelemetryResponse("P=-9876")
         assertEquals(-9876L, handler.telemetry.value.encoderCount)
