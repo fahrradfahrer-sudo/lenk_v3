@@ -22,6 +22,8 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.IOException
 import java.nio.ByteBuffer
 import kotlin.math.roundToInt
@@ -38,6 +40,8 @@ class MotorHandler {
 
     private val _terminalLogs = MutableStateFlow<List<TerminalLogEntry>>(emptyList())
     val terminalLogs: StateFlow<List<TerminalLogEntry>> = _terminalLogs.asStateFlow()
+
+    private val writeMutex = Mutex()
 
     private fun logTerminal(direction: TerminalLogDirection, message: String) {
         val entry = TerminalLogEntry(direction = direction, message = message)
@@ -62,11 +66,13 @@ class MotorHandler {
             val port = usbPort
             if (port != null && _config.value.isConnected) {
                 scope.launch {
-                    try {
-                        val formatted = if (trimmed.endsWith("\r") || trimmed.endsWith("\n")) trimmed else "$trimmed\r"
-                        port.write(formatted.toByteArray(Charsets.US_ASCII), 500)
-                    } catch (e: Exception) {
-                        logTerminal(TerminalLogDirection.ERROR, "TX Fail: ${e.message}")
+                    writeMutex.withLock {
+                        try {
+                            val formatted = if (trimmed.endsWith("\r") || trimmed.endsWith("\n")) trimmed else "$trimmed\r"
+                            port.write(formatted.toByteArray(Charsets.US_ASCII), 500)
+                        } catch (e: Exception) {
+                            logTerminal(TerminalLogDirection.ERROR, "TX Fail: ${e.message}")
+                        }
                     }
                 }
             } else {
@@ -87,6 +93,7 @@ class MotorHandler {
     private var phidgetVoltageInput: com.phidget22.VoltageInput? = null
 
     private var communicationJob: Job? = null
+    private var readJob: Job? = null
     private var phidgetConnectionJob: Job? = null
     private var simulationJob: Job? = null
     private var activityRef: java.lang.ref.WeakReference<android.app.Activity>? = null
@@ -874,8 +881,10 @@ class MotorHandler {
     fun disconnect() {
         runBlocking {
             communicationJob?.cancelAndJoin()
+            readJob?.cancelAndJoin()
         }
         communicationJob = null
+        readJob = null
         phidgetConnectionJob?.cancel()
         phidgetConnectionJob = null
         simulationJob?.cancel()
@@ -917,10 +926,9 @@ class MotorHandler {
     }
 
     private fun startHardwareCommunicationLoop() {
-        communicationJob = scope.launch {
-            val buffer = ByteArray(1024)
-            val sb = StringBuilder()
+        startUsbReadLoop()
 
+        communicationJob = scope.launch {
             while (isActive) {
                 val config = _config.value
                 val freq = config.commandLoopFrequencyHz.coerceIn(1, 50)
@@ -938,24 +946,55 @@ class MotorHandler {
                         val scaledPower = (effectivePowerPercent * maxLimitRatio * 10.0f).roundToInt().coerceIn(-1000, 1000)
 
                         val ch = config.roboteqChannel
-                        val powerCmd = if (ch == 3) {
-                            "!G 1 $scaledPower\r!G 2 $scaledPower\r"
+                        val commands = mutableListOf<String>()
+
+                        if (ch == 3) {
+                            commands.add("!G 1 $scaledPower\r")
+                            commands.add("!G 2 $scaledPower\r")
+                            commands.add("?C\r")
+                            commands.add("?A\r")
+                            commands.add("?V\r")
+                            commands.add("?S\r")
+                            commands.add("?T\r")
                         } else {
-                            "!G $ch $scaledPower\r"
+                            commands.add("!G $ch $scaledPower\r")
+                            commands.add("?C $ch\r")
+                            commands.add("?A $ch\r")
+                            commands.add("?V\r")
+                            commands.add("?S $ch\r")
+                            commands.add("?T $ch\r")
                         }
 
-                        val queryCmd = if (ch == 3) {
-                            "?C\r?A\r?V\r?S\r?T\r"
-                        } else {
-                            "?C $ch\r?A $ch\r?V\r?S $ch\r?T $ch\r"
+                        writeMutex.withLock {
+                            for (cmd in commands) {
+                                if (!isActive) break
+                                try {
+                                    port.write(cmd.toByteArray(Charsets.US_ASCII), 200)
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "Error writing command '$cmd': ${e.message}")
+                                }
+                                delay(15)
+                            }
                         }
-
-                        val fullCmd = "$powerCmd$queryCmd"
-                        port.write(fullCmd.toByteArray(Charsets.US_ASCII), 200)
                         _telemetry.value = _telemetry.value.copy(actualPowerPercent = effectivePowerPercent * maxLimitRatio)
                     }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Motor hardware comm error", e)
+                }
+                delay(loopDelayMs)
+            }
+        }
+    }
 
-                    val len = port.read(buffer, loopDelayMs.toInt().coerceAtMost(200))
+    private fun startUsbReadLoop() {
+        readJob = scope.launch {
+            val buffer = ByteArray(1024)
+            val sb = StringBuilder()
+
+            while (isActive) {
+                try {
+                    val port = usbPort ?: break
+                    val len = port.read(buffer, 100)
                     if (len > 0) {
                         val text = String(buffer, 0, len, Charsets.US_ASCII)
                         sb.append(text)
@@ -974,9 +1013,11 @@ class MotorHandler {
                         }
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "Motor hardware comm error", e)
+                    if (isActive) {
+                        Log.e(TAG, "Error reading from motor USB port", e)
+                    }
                 }
-                delay(loopDelayMs)
+                delay(10)
             }
         }
     }
@@ -999,13 +1040,15 @@ class MotorHandler {
             "!G ${config.roboteqChannel} $scaledPower\r"
         }
         scope.launch {
-            try {
-                port.write(command.toByteArray(Charsets.US_ASCII), 200)
-                logTerminal(TerminalLogDirection.TX, command.trim())
-                _telemetry.value = _telemetry.value.copy(actualPowerPercent = effectivePowerPercent * maxLimitRatio)
-            } catch (e: Exception) {
-                Log.e(TAG, "Error sending Roboteq command", e)
-                logTerminal(TerminalLogDirection.ERROR, "TX Fail: ${e.message}")
+            writeMutex.withLock {
+                try {
+                    port.write(command.toByteArray(Charsets.US_ASCII), 200)
+                    logTerminal(TerminalLogDirection.TX, command.trim())
+                    _telemetry.value = _telemetry.value.copy(actualPowerPercent = effectivePowerPercent * maxLimitRatio)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error sending Roboteq command", e)
+                    logTerminal(TerminalLogDirection.ERROR, "TX Fail: ${e.message}")
+                }
             }
         }
     }
