@@ -22,6 +22,7 @@ class MotorHandlerTest {
         val updated = defaultConfig.copy(
             motorType = MotorType.ROBOTEQ,
             roboteqChannel = 3, // Dual Mode
+            commandLoopFrequencyHz = 20,
             invertDirection = true,
             maxPowerLimitPercent = 80
         )
@@ -29,6 +30,7 @@ class MotorHandlerTest {
 
         assertEquals(MotorType.ROBOTEQ, handler.config.value.motorType)
         assertEquals(3, handler.config.value.roboteqChannel)
+        assertEquals(20, handler.config.value.commandLoopFrequencyHz)
         assertTrue(handler.config.value.invertDirection)
         assertEquals(80, handler.config.value.maxPowerLimitPercent)
     }
@@ -95,9 +97,17 @@ class MotorHandlerTest {
         handler.parseHardwareTelemetryResponse("A=15")
         assertEquals(1.5, handler.telemetry.value.currentAmps, 0.01)
 
-        // Test Roboteq Voltages (V=124:121:50 -> 12.4V)
-        handler.parseHardwareTelemetryResponse("V=124:121:50")
-        assertEquals(12.4, handler.telemetry.value.voltageVolts, 0.01)
+        // Test Roboteq Voltages (V=124:240:50 -> main battery V+ is index 1 = 24.0V)
+        handler.parseHardwareTelemetryResponse("V=124:240:50")
+        assertEquals(24.0, handler.telemetry.value.voltageVolts, 0.01)
+
+        // Test Roboteq Multi-Channel Response for Channel 2
+        handler.updateConfig(MotorConfig(motorType = MotorType.ROBOTEQ, roboteqChannel = 2))
+        handler.parseHardwareTelemetryResponse("C=100:200")
+        assertEquals(200L, handler.telemetry.value.encoderCount)
+
+        handler.parseHardwareTelemetryResponse("A=15:35")
+        assertEquals(3.5, handler.telemetry.value.currentAmps, 0.01)
 
         // Test Roboteq Speed (S=1800 -> 1800 RPM)
         handler.parseHardwareTelemetryResponse("S=1800")

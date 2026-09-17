@@ -10,6 +10,7 @@ data class MotorConfig(
     val motorType: MotorType = MotorType.NONE_SIMULATED,
     val roboteqChannel: Int = 1,
     val roboteqBaudRate: Int = 115200,
+    val commandLoopFrequencyHz: Int = 10, // 1 to 50 Hz, default 10 Hz
     val phidgetChannel: Int = 0,
     val phidgetSerialNumber: Int = -1, // -1 means any device
     val phidgetAcceleration: Double = 25.0, // Duty cycle acceleration (valid range on 1065_1B: 0.28 - 62.5)
