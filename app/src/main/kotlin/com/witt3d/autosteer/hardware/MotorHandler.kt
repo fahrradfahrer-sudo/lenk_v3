@@ -422,12 +422,18 @@ class MotorHandler {
                 val baud = if (currentConfig.motorType == MotorType.ROBOTEQ) currentConfig.roboteqBaudRate else 115200
                 val port = driver.ports[0]
                 port.open(connection)
+                try {
+                    port.dtr = true
+                    port.rts = true
+                } catch (e: Exception) {
+                    Log.w(TAG, "Could not pre-set DTR/RTS lines: ${e.message}")
+                }
                 port.setParameters(baud, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
                 try {
                     port.dtr = true
                     port.rts = true
                 } catch (e: Exception) {
-                    Log.w(TAG, "Could not set DTR/RTS lines: ${e.message}")
+                    Log.w(TAG, "Could not post-set DTR/RTS lines: ${e.message}")
                 }
                 usbPort = port
 
@@ -929,6 +935,7 @@ class MotorHandler {
         startUsbReadLoop()
 
         communicationJob = scope.launch {
+            var initializedRoboteq = false
             while (isActive) {
                 val config = _config.value
                 val freq = config.commandLoopFrequencyHz.coerceIn(1, 50)
@@ -938,6 +945,18 @@ class MotorHandler {
                     val port = usbPort ?: break
 
                     if (config.motorType == MotorType.ROBOTEQ) {
+                        if (!initializedRoboteq) {
+                            initializedRoboteq = true
+                            writeMutex.withLock {
+                                try {
+                                    port.write("^ECH 1\r".toByteArray(Charsets.US_ASCII), 200)
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "Roboteq echo config command failed: ${e.message}")
+                                }
+                            }
+                            delay(50)
+                        }
+
                         var effectivePowerPercent = currentTargetPowerPercent
                         if (config.invertDirection) {
                             effectivePowerPercent = -effectivePowerPercent
@@ -1079,63 +1098,66 @@ class MotorHandler {
     }
 
     fun parseHardwareTelemetryResponse(response: String) {
-        val current = _telemetry.value
-
         try {
             val cleanResp = response.trim()
             if (cleanResp.isNotEmpty()) {
                 logTerminal(TerminalLogDirection.RX, cleanResp)
             }
             val targetChannel = _config.value.roboteqChannel
+            val normalized = cleanResp.trimStart { it == ':' || it == '+' || it == '-' || it == '?' || it == '>' || it.isWhitespace() }
+
+            val keyIndex = listOf("C=", "P=", "A=", "I=", "V=", "S=", "T=").map { normalized.indexOf(it) }.filter { it >= 0 }.minOrNull()
+            val payload = if (keyIndex != null && keyIndex >= 0) normalized.substring(keyIndex) else normalized
+
             when {
-                cleanResp.startsWith("C=") || cleanResp.startsWith("P=") -> {
-                    val rawStr = cleanResp.substring(2).trim()
+                payload.startsWith("C=") || payload.startsWith("P=") -> {
+                    val rawStr = payload.substring(2).trim()
                     val count = parseChannelMetricValue(rawStr, targetChannel)?.toLong()
                     if (count != null) {
-                        _telemetry.value = current.copy(encoderCount = count)
+                        _telemetry.value = _telemetry.value.copy(encoderCount = count)
                     }
                 }
-                cleanResp.startsWith("A=") -> {
-                    val rawStr = cleanResp.substring(2).trim()
+                payload.startsWith("A=") -> {
+                    val rawStr = payload.substring(2).trim()
                     val rawAmps = parseChannelMetricValue(rawStr, targetChannel)
                     if (rawAmps != null) {
-                        _telemetry.value = current.copy(currentAmps = rawAmps / 10.0)
+                        _telemetry.value = _telemetry.value.copy(currentAmps = rawAmps / 10.0)
                     }
                 }
-                cleanResp.startsWith("I=") -> {
-                    val rawStr = cleanResp.substring(2).trim()
+                payload.startsWith("I=") -> {
+                    val rawStr = payload.substring(2).trim()
                     val amps = parseChannelMetricValue(rawStr, targetChannel)
                     if (amps != null) {
-                        _telemetry.value = current.copy(currentAmps = amps)
+                        _telemetry.value = _telemetry.value.copy(currentAmps = amps)
                     }
                 }
-                cleanResp.startsWith("V=") -> {
-                    val rawStr = cleanResp.substring(2).trim()
+                payload.startsWith("V=") -> {
+                    val rawStr = payload.substring(2).trim()
                     if (rawStr.contains(":")) {
                         val parts = rawStr.split(":")
                         // Roboteq V= format: parts[0]=Internal V, parts[1]=Main Battery V+, parts[2]=5V output
                         val mainVolts = if (parts.size >= 2) parts[1].toDoubleOrNull() else parts[0].toDoubleOrNull()
                         if (mainVolts != null) {
                             val actualVolts = if (mainVolts > 50.0) mainVolts / 10.0 else mainVolts
-                            _telemetry.value = current.copy(voltageVolts = actualVolts)
+                            _telemetry.value = _telemetry.value.copy(voltageVolts = actualVolts)
                         }
                     } else {
                         val volts = parseFirstMetricValue(rawStr)
                         if (volts != null) {
                             val actualVolts = if (volts > 50.0) volts / 10.0 else volts
-                            _telemetry.value = current.copy(voltageVolts = actualVolts)
+                            _telemetry.value = _telemetry.value.copy(voltageVolts = actualVolts)
                         }
                     }
                 }
-                cleanResp.startsWith("S=") -> {
-                    val rawStr = cleanResp.substring(2).trim()
+                payload.startsWith("S=") -> {
+                    val rawStr = payload.substring(2).trim()
                     val rpm = parseChannelMetricValue(rawStr, targetChannel)?.toInt()
                     if (rpm != null) {
-                        _telemetry.value = current.copy(speedRpm = rpm)
+                        _telemetry.value = _telemetry.value.copy(speedRpm = rpm)
                     }
                 }
-                cleanResp.startsWith("T=") -> {
-                    val rawStr = cleanResp.substring(2).trim()
+                payload.startsWith("T=") -> {
+                    val rawStr = payload.substring(2).trim()
                     val tempC = parseChannelMetricValue(rawStr, targetChannel)
                     if (tempC != null) {
                         Log.d(TAG, "Roboteq controller temperature: ${tempC}°C")
