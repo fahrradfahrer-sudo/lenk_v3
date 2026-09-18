@@ -93,9 +93,21 @@ class MotorHandlerTest {
         handler.parseHardwareTelemetryResponse("C=12345")
         assertEquals(12345L, handler.telemetry.value.encoderCount)
 
+        // Test Roboteq Encoder with prompt prefix (":C=67890")
+        handler.parseHardwareTelemetryResponse(":C=67890")
+        assertEquals(67890L, handler.telemetry.value.encoderCount)
+
+        // Test Roboteq Encoder with command echo prefix ("?C 1 C=9999")
+        handler.parseHardwareTelemetryResponse("?C 1 C=9999")
+        assertEquals(9999L, handler.telemetry.value.encoderCount)
+
         // Test Roboteq Amps (A=15 -> 1.5A)
         handler.parseHardwareTelemetryResponse("A=15")
         assertEquals(1.5, handler.telemetry.value.currentAmps, 0.01)
+
+        // Test Roboteq Amps with acknowledgment prefix ("+A=25")
+        handler.parseHardwareTelemetryResponse("+A=25")
+        assertEquals(2.5, handler.telemetry.value.currentAmps, 0.01)
 
         // Test Roboteq Voltages (V=124:240:50 -> main battery V+ is index 1 = 24.0V)
         handler.parseHardwareTelemetryResponse("V=124:240:50")
