@@ -9,9 +9,13 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import android.widget.Toast
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -33,6 +37,8 @@ fun DropdownTerminal(
     var commandInput by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
 
+    val context = LocalContext.current
+    val clipboardManager = LocalClipboardManager.current
     val timeFormatter = remember { SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault()) }
 
     LaunchedEffect(logs.size, isExpanded) {
@@ -87,11 +93,36 @@ fun DropdownTerminal(
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        OutlinedButton(
-                            onClick = onClearLogs,
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
-                        ) {
-                            Text("Clear", style = MaterialTheme.typography.labelSmall)
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            OutlinedButton(
+                                onClick = {
+                                    if (logs.isNotEmpty()) {
+                                        val formatted = logs.joinToString("\n") { entry ->
+                                            val timeStr = timeFormatter.format(Date(entry.timestamp))
+                                            val prefix = when (entry.direction) {
+                                                TerminalLogDirection.TX -> "TX ->"
+                                                TerminalLogDirection.RX -> "RX <-"
+                                                TerminalLogDirection.INFO -> "INFO  "
+                                                TerminalLogDirection.ERROR -> "ERR ! "
+                                            }
+                                            "[$timeStr] $prefix ${entry.message}"
+                                        }
+                                        clipboardManager.setText(AnnotatedString(formatted))
+                                        Toast.makeText(context, "Terminal log copied to clipboard", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        Toast.makeText(context, "Terminal log is empty", Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Text("Copy", style = MaterialTheme.typography.labelSmall)
+                            }
+                            OutlinedButton(
+                                onClick = onClearLogs,
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Text("Clear", style = MaterialTheme.typography.labelSmall)
+                            }
                         }
                     }
 
