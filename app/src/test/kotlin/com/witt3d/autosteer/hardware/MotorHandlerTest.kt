@@ -81,6 +81,15 @@ class MotorHandlerTest {
         assertEquals("C=54321", logsAfterRx.last().message)
         assertEquals(54321L, handler.telemetry.value.encoderCount)
 
+        // Test Roboteq query echo and error/ack response logging
+        handler.parseHardwareTelemetryResponse(": ?V")
+        val logsAfterEcho = handler.terminalLogs.value
+        assertEquals(": ?V", logsAfterEcho.last().message)
+
+        handler.parseHardwareTelemetryResponse("E=1")
+        val logsAfterErr = handler.terminalLogs.value
+        assertEquals("E=1", logsAfterErr.last().message)
+
         handler.clearTerminalLogs()
         assertEquals(0, handler.terminalLogs.value.size)
     }
