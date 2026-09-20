@@ -121,6 +121,13 @@ class MotorHandlerTest {
         assertEquals(12.5, handler.telemetry.value.voltageVolts, 0.01)
         assertEquals(1200, handler.telemetry.value.speedRpm)
 
+        // Test Combined Query Response with Echo ("?C 1:?A 1:?V:?S 1 C=7777 A=30 V=120:128:5040 S=1500")
+        handler.parseHardwareTelemetryResponse("?C 1:?A 1:?V:?S 1 C=7777 A=30 V=120:128:5040 S=1500")
+        assertEquals(7777L, handler.telemetry.value.encoderCount)
+        assertEquals(3.0, handler.telemetry.value.currentAmps, 0.01)
+        assertEquals(12.8, handler.telemetry.value.voltageVolts, 0.01)
+        assertEquals(1500, handler.telemetry.value.speedRpm)
+
         // Test Roboteq Amps (A=15 -> 1.5A)
         handler.parseHardwareTelemetryResponse("A=15")
         assertEquals(1.5, handler.telemetry.value.currentAmps, 0.01)
