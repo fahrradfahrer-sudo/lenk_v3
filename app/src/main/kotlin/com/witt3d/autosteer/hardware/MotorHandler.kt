@@ -987,7 +987,7 @@ class MotorHandler {
                             commands.add("?A $ch\r\n")
                             commands.add("?V\r\n")
                             commands.add("?S $ch\r\n")
-                            commands.add("?T $ch\r\n")
+                            commands.add("?T\r\n")
                         }
 
                         writeMutex.withLock {
