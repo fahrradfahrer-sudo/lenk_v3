@@ -68,12 +68,12 @@ class MotorHandler {
                 scope.launch {
                     writeMutex.withLock {
                         try {
-                            val formatted = if (trimmed.endsWith("\r\n")) {
+                            val formatted = if (trimmed.endsWith("\r")) {
                                 trimmed
-                            } else if (trimmed.endsWith("\r") || trimmed.endsWith("\n")) {
-                                "${trimmed.trimEnd('\r', '\n')}\r\n"
+                            } else if (trimmed.endsWith("\r\n") || trimmed.endsWith("\n")) {
+                                "${trimmed.trimEnd('\r', '\n')}\r"
                             } else {
-                                "$trimmed\r\n"
+                                "$trimmed\r"
                             }
                             port.write(formatted.toByteArray(Charsets.US_ASCII), 500)
                         } catch (e: Exception) {
@@ -955,7 +955,8 @@ class MotorHandler {
                             initializedRoboteq = true
                             writeMutex.withLock {
                                 try {
-                                    port.write("^ECH 1\r\n".toByteArray(Charsets.US_ASCII), 200)
+                                    port.write("^ECH 1\r".toByteArray(Charsets.US_ASCII), 200)
+                                    logTerminal(TerminalLogDirection.TX, "^ECH 1")
                                 } catch (e: Exception) {
                                     Log.w(TAG, "Roboteq echo config command failed: ${e.message}")
                                 }
@@ -974,20 +975,20 @@ class MotorHandler {
                         val commands = mutableListOf<String>()
 
                         if (ch == 3) {
-                            commands.add("!G 1 $scaledPower\r\n")
-                            commands.add("!G 2 $scaledPower\r\n")
-                            commands.add("?C\r\n")
-                            commands.add("?A\r\n")
-                            commands.add("?V\r\n")
-                            commands.add("?S\r\n")
-                            commands.add("?T\r\n")
+                            commands.add("!G 1 $scaledPower\r")
+                            commands.add("!G 2 $scaledPower\r")
+                            commands.add("?C\r")
+                            commands.add("?A\r")
+                            commands.add("?V\r")
+                            commands.add("?S\r")
+                            commands.add("?T\r")
                         } else {
-                            commands.add("!G $ch $scaledPower\r\n")
-                            commands.add("?C $ch\r\n")
-                            commands.add("?A $ch\r\n")
-                            commands.add("?V\r\n")
-                            commands.add("?S $ch\r\n")
-                            commands.add("?T\r\n")
+                            commands.add("!G $ch $scaledPower\r")
+                            commands.add("?C $ch\r")
+                            commands.add("?A $ch\r")
+                            commands.add("?V\r")
+                            commands.add("?S $ch\r")
+                            commands.add("?T\r")
                         }
 
                         writeMutex.withLock {
@@ -995,6 +996,7 @@ class MotorHandler {
                                 if (!isActive) break
                                 try {
                                     port.write(cmd.toByteArray(Charsets.US_ASCII), 200)
+                                    logTerminal(TerminalLogDirection.TX, cmd.trim())
                                 } catch (e: Exception) {
                                     Log.w(TAG, "Error writing command '$cmd': ${e.message}")
                                 }
@@ -1061,9 +1063,9 @@ class MotorHandler {
         val scaledPower = (effectivePowerPercent * maxLimitRatio * 10.0f).roundToInt().coerceIn(-1000, 1000)
 
         val command = if (config.roboteqChannel == 3) {
-            "!G 1 $scaledPower\r\n!G 2 $scaledPower\r\n"
+            "!G 1 $scaledPower\r!G 2 $scaledPower\r"
         } else {
-            "!G ${config.roboteqChannel} $scaledPower\r\n"
+            "!G ${config.roboteqChannel} $scaledPower\r"
         }
         scope.launch {
             writeMutex.withLock {
