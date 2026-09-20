@@ -12,6 +12,9 @@ import com.hoho.android.usbserial.driver.CdcAcmSerialDriver
 import com.hoho.android.usbserial.driver.FtdiSerialDriver
 import com.hoho.android.usbserial.driver.UsbSerialPort
 import com.hoho.android.usbserial.driver.UsbSerialProber
+import com.hoho.android.usbserial.util.SerialInputOutputManager
+import java.util.concurrent.Executors
+import java.util.concurrent.ExecutorService
 import com.witt3d.autosteer.data.models.MotorConfig
 import com.witt3d.autosteer.data.models.MotorTelemetry
 import com.witt3d.autosteer.data.models.MotorType
@@ -99,7 +102,8 @@ class MotorHandler {
     private var phidgetVoltageInput: com.phidget22.VoltageInput? = null
 
     private var communicationJob: Job? = null
-    private var readJob: Job? = null
+    private var ioManager: SerialInputOutputManager? = null
+    private var ioExecutor: ExecutorService? = null
     private var phidgetConnectionJob: Job? = null
     private var simulationJob: Job? = null
     private var activityRef: java.lang.ref.WeakReference<android.app.Activity>? = null
@@ -882,10 +886,23 @@ class MotorHandler {
     fun disconnect() {
         runBlocking {
             communicationJob?.cancelAndJoin()
-            readJob?.cancelAndJoin()
         }
         communicationJob = null
-        readJob = null
+
+        try {
+            ioManager?.stop()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error stopping SerialInputOutputManager", e)
+        }
+        ioManager = null
+
+        try {
+            ioExecutor?.shutdownNow()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error shutting down ioExecutor", e)
+        }
+        ioExecutor = null
+
         phidgetConnectionJob?.cancel()
         phidgetConnectionJob = null
         simulationJob?.cancel()
@@ -944,8 +961,8 @@ class MotorHandler {
                             initializedRoboteq = true
                             writeMutex.withLock {
                                 try {
-                                    port.write("^ECH 1\r".toByteArray(Charsets.US_ASCII), 200)
-                                    logTerminal(TerminalLogDirection.TX, "^ECH 1")
+                                    port.write("^ECHOF 1\r".toByteArray(Charsets.US_ASCII), 200)
+                                    logTerminal(TerminalLogDirection.TX, "^ECHOF 1")
                                 } catch (e: Exception) {
                                     Log.w(TAG, "Roboteq echo config command failed: ${e.message}")
                                 }
@@ -966,18 +983,10 @@ class MotorHandler {
                         if (ch == 3) {
                             commands.add("!G 1 $scaledPower\r")
                             commands.add("!G 2 $scaledPower\r")
-                            commands.add("?C\r")
-                            commands.add("?A\r")
-                            commands.add("?V\r")
-                            commands.add("?S\r")
-                            commands.add("?T\r")
+                            commands.add("?C:?A:?V:?S\r")
                         } else {
                             commands.add("!G $ch $scaledPower\r")
-                            commands.add("?C $ch\r")
-                            commands.add("?A $ch\r")
-                            commands.add("?V\r")
-                            commands.add("?S $ch\r")
-                            commands.add("?T\r")
+                            commands.add("?C $ch:?A $ch:?V:?S $ch\r")
                         }
 
                         writeMutex.withLock {
@@ -1040,28 +1049,23 @@ class MotorHandler {
     }
 
     private fun startUsbReadLoop() {
-        readJob = scope.launch {
-            val buffer = ByteArray(1024)
-            val sb = StringBuilder()
-
-            while (isActive) {
-                try {
-                    val port = usbPort ?: break
-                    val len = port.read(buffer, 100)
-                    if (len > 0) {
-                        val text = String(buffer, 0, len, Charsets.US_ASCII)
-                        sb.append(text)
-                        extractAndParseLines(sb)
-                    }
-                } catch (e: Exception) {
-                    if (isActive) {
-                        Log.e(TAG, "Error reading from motor USB port", e)
-                        logTerminal(TerminalLogDirection.ERROR, "RX Fail: ${e.message ?: e.javaClass.simpleName}")
-                    }
+        val port = usbPort ?: return
+        val sb = StringBuilder()
+        ioManager = SerialInputOutputManager(port, object : SerialInputOutputManager.Listener {
+            override fun onNewData(data: ByteArray) {
+                sb.append(String(data, Charsets.US_ASCII))
+                var i = sb.indexOf("\r").let { if (it < 0) sb.indexOf("\n") else it }
+                while (i >= 0) {
+                    sb.substring(0, i).trim().takeIf { it.isNotEmpty() }?.let(::parseHardwareTelemetryResponse)
+                    sb.delete(0, i + 1)
+                    i = sb.indexOf("\r").let { if (it < 0) sb.indexOf("\n") else it }
                 }
-                delay(10)
             }
-        }
+            override fun onRunError(e: Exception) { Log.e(TAG, "IO error", e) }
+        })
+        val executor = Executors.newSingleThreadExecutor()
+        ioExecutor = executor
+        executor.submit(ioManager)
     }
 
     private fun sendRoboteqPowerCommand(powerPercent: Float) {
