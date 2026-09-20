@@ -588,18 +588,7 @@ class MotorHandler {
                             val text = String(readBuffer, 0, safeLen, Charsets.US_ASCII)
                             sb.append(text)
 
-                            var newlineIndex = sb.indexOf("\r")
-                            if (newlineIndex < 0) newlineIndex = sb.indexOf("\n")
-
-                            while (newlineIndex >= 0) {
-                                val line = sb.substring(0, newlineIndex).trim()
-                                sb.delete(0, newlineIndex + 1)
-                                if (line.isNotEmpty()) {
-                                    parseHardwareTelemetryResponse(line)
-                                }
-                                newlineIndex = sb.indexOf("\r")
-                                if (newlineIndex < 0) newlineIndex = sb.indexOf("\n")
-                            }
+                            extractAndParseLines(sb)
                         }
                     }
                 } catch (e: Exception) {
@@ -1000,7 +989,7 @@ class MotorHandler {
                                 } catch (e: Exception) {
                                     Log.w(TAG, "Error writing command '$cmd': ${e.message}")
                                 }
-                                delay(15)
+                                delay(35)
                             }
                         }
                         _telemetry.value = _telemetry.value.copy(actualPowerPercent = effectivePowerPercent * maxLimitRatio)
@@ -1009,6 +998,43 @@ class MotorHandler {
                     Log.e(TAG, "Motor hardware comm error", e)
                 }
                 delay(loopDelayMs)
+            }
+        }
+    }
+
+    private fun extractAndParseLines(sb: StringBuilder) {
+        while (true) {
+            val rIdx = sb.indexOf("\r")
+            val nIdx = sb.indexOf("\n")
+
+            if (rIdx < 0 && nIdx < 0) break
+
+            val lineEndIndex: Int
+            val deleteEndIndex: Int
+
+            if (rIdx >= 0 && nIdx >= 0) {
+                if (nIdx == rIdx + 1) {
+                    lineEndIndex = rIdx
+                    deleteEndIndex = nIdx + 1
+                } else if (rIdx < nIdx) {
+                    lineEndIndex = rIdx
+                    deleteEndIndex = rIdx + 1
+                } else {
+                    lineEndIndex = nIdx
+                    deleteEndIndex = nIdx + 1
+                }
+            } else if (rIdx >= 0) {
+                lineEndIndex = rIdx
+                deleteEndIndex = rIdx + 1
+            } else {
+                lineEndIndex = nIdx
+                deleteEndIndex = nIdx + 1
+            }
+
+            val line = sb.substring(0, lineEndIndex).trim()
+            sb.delete(0, deleteEndIndex)
+            if (line.isNotEmpty()) {
+                parseHardwareTelemetryResponse(line)
             }
         }
     }
@@ -1025,19 +1051,7 @@ class MotorHandler {
                     if (len > 0) {
                         val text = String(buffer, 0, len, Charsets.US_ASCII)
                         sb.append(text)
-
-                        var newlineIndex = sb.indexOf("\r")
-                        if (newlineIndex < 0) newlineIndex = sb.indexOf("\n")
-
-                        while (newlineIndex >= 0) {
-                            val line = sb.substring(0, newlineIndex).trim()
-                            sb.delete(0, newlineIndex + 1)
-                            if (line.isNotEmpty()) {
-                                parseHardwareTelemetryResponse(line)
-                            }
-                            newlineIndex = sb.indexOf("\r")
-                            if (newlineIndex < 0) newlineIndex = sb.indexOf("\n")
-                        }
+                        extractAndParseLines(sb)
                     }
                 } catch (e: Exception) {
                     if (isActive) {
@@ -1106,6 +1120,8 @@ class MotorHandler {
         }
     }
 
+    private val telemetryRegex = Regex("([CPAIVST])=([^\\s]+)")
+
     fun parseHardwareTelemetryResponse(response: String) {
         try {
             val cleanResp = response.trim()
@@ -1113,63 +1129,59 @@ class MotorHandler {
                 logTerminal(TerminalLogDirection.RX, cleanResp)
             }
             val targetChannel = _config.value.roboteqChannel
-            val normalized = cleanResp.trimStart { it == ':' || it == '+' || it == '-' || it == '?' || it == '>' || it.isWhitespace() }
+            val matches = telemetryRegex.findAll(cleanResp)
 
-            val keyIndex = listOf("C=", "P=", "A=", "I=", "V=", "S=", "T=").map { normalized.indexOf(it) }.filter { it >= 0 }.minOrNull()
-            val payload = if (keyIndex != null && keyIndex >= 0) normalized.substring(keyIndex) else normalized
+            for (match in matches) {
+                val key = match.groupValues[1]
+                val rawStr = match.groupValues[2]
 
-            when {
-                payload.startsWith("C=") || payload.startsWith("P=") -> {
-                    val rawStr = payload.substring(2).trim()
-                    val count = parseChannelMetricValue(rawStr, targetChannel)?.toLong()
-                    if (count != null) {
-                        _telemetry.value = _telemetry.value.copy(encoderCount = count)
-                    }
-                }
-                payload.startsWith("A=") -> {
-                    val rawStr = payload.substring(2).trim()
-                    val rawAmps = parseChannelMetricValue(rawStr, targetChannel)
-                    if (rawAmps != null) {
-                        _telemetry.value = _telemetry.value.copy(currentAmps = rawAmps / 10.0)
-                    }
-                }
-                payload.startsWith("I=") -> {
-                    val rawStr = payload.substring(2).trim()
-                    val amps = parseChannelMetricValue(rawStr, targetChannel)
-                    if (amps != null) {
-                        _telemetry.value = _telemetry.value.copy(currentAmps = amps)
-                    }
-                }
-                payload.startsWith("V=") -> {
-                    val rawStr = payload.substring(2).trim()
-                    if (rawStr.contains(":")) {
-                        val parts = rawStr.split(":")
-                        // Roboteq V= format: parts[0]=Internal V, parts[1]=Main Battery V+, parts[2]=5V output
-                        val mainVolts = if (parts.size >= 2) parts[1].toDoubleOrNull() else parts[0].toDoubleOrNull()
-                        if (mainVolts != null) {
-                            val actualVolts = if (mainVolts > 50.0) mainVolts / 10.0 else mainVolts
-                            _telemetry.value = _telemetry.value.copy(voltageVolts = actualVolts)
-                        }
-                    } else {
-                        val volts = parseFirstMetricValue(rawStr)
-                        if (volts != null) {
-                            val actualVolts = if (volts > 50.0) volts / 10.0 else volts
-                            _telemetry.value = _telemetry.value.copy(voltageVolts = actualVolts)
+                when (key) {
+                    "C", "P" -> {
+                        val count = parseChannelMetricValue(rawStr, targetChannel)?.toLong()
+                        if (count != null) {
+                            _telemetry.value = _telemetry.value.copy(encoderCount = count)
                         }
                     }
-                }
-                payload.startsWith("S=") -> {
-                    val rawStr = payload.substring(2).trim()
-                    val rpm = parseChannelMetricValue(rawStr, targetChannel)?.toInt()
-                    if (rpm != null) {
-                        _telemetry.value = _telemetry.value.copy(speedRpm = rpm)
+                    "A" -> {
+                        val rawAmps = parseChannelMetricValue(rawStr, targetChannel)
+                        if (rawAmps != null) {
+                            _telemetry.value = _telemetry.value.copy(currentAmps = rawAmps / 10.0)
+                        }
                     }
-                }
-                payload.startsWith("T=") -> {
-                    val rawStr = payload.substring(2).trim()
-                    val tempC = parseChannelMetricValue(rawStr, targetChannel)
-                    if (tempC != null) {
-                        Log.d(TAG, "Roboteq controller temperature: ${tempC}°C")
+                    "I" -> {
+                        val amps = parseChannelMetricValue(rawStr, targetChannel)
+                        if (amps != null) {
+                            _telemetry.value = _telemetry.value.copy(currentAmps = amps)
+                        }
+                    }
+                    "V" -> {
+                        if (rawStr.contains(":")) {
+                            val parts = rawStr.split(":")
+                            // Roboteq V= format: parts[0]=Internal V, parts[1]=Main Battery V+, parts[2]=5V output
+                            val mainVolts = if (parts.size >= 2) parts[1].toDoubleOrNull() else parts[0].toDoubleOrNull()
+                            if (mainVolts != null) {
+                                val actualVolts = if (mainVolts > 50.0) mainVolts / 10.0 else mainVolts
+                                _telemetry.value = _telemetry.value.copy(voltageVolts = actualVolts)
+                            }
+                        } else {
+                            val volts = parseFirstMetricValue(rawStr)
+                            if (volts != null) {
+                                val actualVolts = if (volts > 50.0) volts / 10.0 else volts
+                                _telemetry.value = _telemetry.value.copy(voltageVolts = actualVolts)
+                            }
+                        }
+                    }
+                    "S" -> {
+                        val rpm = parseChannelMetricValue(rawStr, targetChannel)?.toInt()
+                        if (rpm != null) {
+                            _telemetry.value = _telemetry.value.copy(speedRpm = rpm)
+                        }
+                    }
+                    "T" -> {
+                        val tempC = parseChannelMetricValue(rawStr, targetChannel)
+                        if (tempC != null) {
+                            Log.d(TAG, "Roboteq controller temperature: ${tempC}°C")
+                        }
                     }
                 }
             }
