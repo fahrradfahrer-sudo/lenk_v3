@@ -58,6 +58,18 @@ data class AbLine(
     }
 }
 
+data class SteeringDiagnosticEntry(
+    val timestampMs: Long = System.currentTimeMillis(),
+    val speedKmh: Double = 0.0,
+    val headingDegrees: Double = 0.0,
+    val crossTrackErrorCm: Double = 0.0,
+    val targetSteeringAngleDegrees: Double = 0.0,
+    val currentSteeringAngleDegrees: Double = 0.0,
+    val motorPowerPercent: Float = 0f,
+    val motorCurrentAmps: Double = 0.0,
+    val statusMessage: String = ""
+)
+
 data class GuidanceState(
     val isAutoSteerEngaged: Boolean = false,
     val abLine: AbLine? = null,

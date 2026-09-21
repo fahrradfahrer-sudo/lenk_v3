@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.witt3d.autosteer.data.models.AbLine
 import com.witt3d.autosteer.data.models.GpsConfig
 import com.witt3d.autosteer.data.models.GuidanceState
+import com.witt3d.autosteer.data.models.HeadingSource
 import com.witt3d.autosteer.data.models.ImuConfig
 import com.witt3d.autosteer.data.models.MotorConfig
 import com.witt3d.autosteer.data.models.MotorTelemetry
@@ -61,14 +62,38 @@ class MainViewModel : ViewModel() {
     private val _guidanceState = MutableStateFlow(GuidanceState())
     val guidanceState: StateFlow<GuidanceState> = _guidanceState.asStateFlow()
 
+    private val _steeringDiagnosticLogs = MutableStateFlow<List<com.witt3d.autosteer.data.models.SteeringDiagnosticEntry>>(emptyList())
+    val steeringDiagnosticLogs: StateFlow<List<com.witt3d.autosteer.data.models.SteeringDiagnosticEntry>> = _steeringDiagnosticLogs.asStateFlow()
+
     private val steeringController = SteeringController()
+
+    fun clearSteeringDiagnosticLogs() {
+        _steeringDiagnosticLogs.value = emptyList()
+    }
+
+    private fun addSteeringDiagnosticEntry(entry: com.witt3d.autosteer.data.models.SteeringDiagnosticEntry) {
+        val currentList = _steeringDiagnosticLogs.value.toMutableList()
+        currentList.add(entry)
+        if (currentList.size > 100) {
+            currentList.removeAt(0)
+        }
+        _steeringDiagnosticLogs.value = currentList
+    }
 
     init {
         // Collect IMU telemetry updates
         viewModelScope.launch {
             imuHandler.telemetry.collect { imuTele ->
+                val currentGpsHeading = gpsHandler.telemetry.value.headingDegrees
+                val currentSpeed = _telemetry.value.speedKmh
+                val effectiveHeading = calculateEffectiveHeading(
+                    imuHeading = imuTele.headingDegrees,
+                    gpsHeading = currentGpsHeading,
+                    speedKmh = currentSpeed,
+                    config = _steeringConfig.value
+                )
                 _telemetry.value = _telemetry.value.copy(
-                    headingDegrees = imuTele.headingDegrees,
+                    headingDegrees = effectiveHeading,
                     inclinationDegrees = imuTele.inclinationDegrees,
                     pitchDegrees = imuTele.pitchDegrees,
                     accelX = imuTele.accelX,
@@ -81,13 +106,20 @@ class MainViewModel : ViewModel() {
         // Collect GPS telemetry updates
         viewModelScope.launch {
             gpsHandler.telemetry.collect { gpsTele ->
+                val currentImuHeading = imuHandler.telemetry.value.headingDegrees
+                val effectiveHeading = calculateEffectiveHeading(
+                    imuHeading = currentImuHeading,
+                    gpsHeading = gpsTele.headingDegrees,
+                    speedKmh = gpsTele.speedKmh,
+                    config = _steeringConfig.value
+                )
                 _telemetry.value = _telemetry.value.copy(
                     latitude = gpsTele.latitude,
                     longitude = gpsTele.longitude,
                     utmX = gpsTele.utmX,
                     utmY = gpsTele.utmY,
                     speedKmh = gpsTele.speedKmh,
-                    headingDegrees = if (gpsTele.headingDegrees != 0.0) gpsTele.headingDegrees else _telemetry.value.headingDegrees,
+                    headingDegrees = effectiveHeading,
                     fixStatus = gpsTele.fixStatus,
                     accuracyMeters = gpsTele.accuracyMeters
                 )
@@ -103,6 +135,27 @@ class MainViewModel : ViewModel() {
             while (isActive) {
                 processAutoSteerLoop()
                 delay(50)
+            }
+        }
+    }
+
+    private fun calculateEffectiveHeading(
+        imuHeading: Double,
+        gpsHeading: Double,
+        speedKmh: Double,
+        config: SteeringConfig
+    ): Double {
+        return when (config.headingSource) {
+            HeadingSource.IMU_ONLY -> if (imuHeading != 0.0) imuHeading else gpsHeading
+            HeadingSource.GPS_COG_ONLY -> if (gpsHeading != 0.0) gpsHeading else imuHeading
+            HeadingSource.AUTO_FUSED -> {
+                if (speedKmh >= config.minHeadingSpeedKmh && gpsHeading != 0.0) {
+                    gpsHeading
+                } else if (imuHeading != 0.0) {
+                    imuHeading
+                } else {
+                    gpsHeading
+                }
             }
         }
     }
@@ -126,10 +179,29 @@ class MainViewModel : ViewModel() {
             tractorConfig = currentTractor
         )
 
+        val currentMotorTelemetry = motorTelemetry.value
         val currentSteerAngle = steeringController.estimateCurrentSteeringAngleDegrees(
-            motorTelemetry = motorTelemetry.value,
+            motorTelemetry = currentMotorTelemetry,
             steeringConfig = currentSteering
         )
+
+        // Motor Over-Current Cutoff Check
+        val currentAmps = currentMotorTelemetry.currentAmps
+        val maxAllowedCurrent = currentSteering.maxMotorCurrentCutoffAmps
+        if (maxAllowedCurrent > 0.0 && currentAmps >= maxAllowedCurrent) {
+            if (currentGuidance.isAutoSteerEngaged) {
+                disengageAutoSteer()
+                _guidanceState.value = _guidanceState.value.copy(
+                    crossTrackErrorCm = currentGuidance.crossTrackErrorCm,
+                    targetSteeringAngleDegrees = 0.0,
+                    compensatedUtmX = groundAxleUtm.x,
+                    compensatedUtmY = groundAxleUtm.y,
+                    currentSteeringAngleDegrees = currentSteerAngle,
+                    steeringStatusMessage = "OVER-CURRENT CUTOFF (%.1fA >= %.1fA)".format(currentAmps, maxAllowedCurrent)
+                )
+                return
+            }
+        }
 
         val activeLine = currentGuidance.abLine
 
@@ -148,7 +220,7 @@ class MainViewModel : ViewModel() {
 
             val motorPower = steeringController.calculateMotorPowerPercent(
                 targetSteeringAngleDegrees = targetSteeringAngle,
-                motorTelemetry = motorTelemetry.value,
+                motorTelemetry = currentMotorTelemetry,
                 steeringConfig = currentSteering
             )
 
@@ -156,13 +228,27 @@ class MainViewModel : ViewModel() {
                 motorHandler.setTargetPowerPercent(motorPower)
             }
 
+            val statusMsg = if (currentGuidance.isAutoSteerEngaged) "AUTOSTEER ENGAGED" else "Guidance Active (Disengaged)"
             _guidanceState.value = currentGuidance.copy(
                 crossTrackErrorCm = cteCm,
                 targetSteeringAngleDegrees = targetSteeringAngle,
                 compensatedUtmX = groundAxleUtm.x,
                 compensatedUtmY = groundAxleUtm.y,
                 currentSteeringAngleDegrees = currentSteerAngle,
-                steeringStatusMessage = if (currentGuidance.isAutoSteerEngaged) "AUTOSTEER ENGAGED" else "Guidance Active (Disengaged)"
+                steeringStatusMessage = statusMsg
+            )
+
+            addSteeringDiagnosticEntry(
+                com.witt3d.autosteer.data.models.SteeringDiagnosticEntry(
+                    speedKmh = currentTele.speedKmh,
+                    headingDegrees = currentTele.headingDegrees,
+                    crossTrackErrorCm = cteCm,
+                    targetSteeringAngleDegrees = targetSteeringAngle,
+                    currentSteeringAngleDegrees = currentSteerAngle,
+                    motorPowerPercent = motorPower,
+                    motorCurrentAmps = currentMotorTelemetry.currentAmps,
+                    statusMessage = statusMsg
+                )
             )
         } else {
             _guidanceState.value = currentGuidance.copy(

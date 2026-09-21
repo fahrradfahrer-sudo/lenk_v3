@@ -1,10 +1,11 @@
 package com.witt3d.autosteer.ui.screens
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -15,12 +16,18 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.witt3d.autosteer.data.models.GpsFixStatus
 import com.witt3d.autosteer.ui.components.CustomGridViewer
 import com.witt3d.autosteer.viewmodel.MainViewModel
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @Composable
 fun MapScreen(viewModel: MainViewModel = viewModel()) {
     val telemetry by viewModel.telemetry.collectAsState()
     val tractorConfig by viewModel.tractorConfig.collectAsState()
     val guidanceState by viewModel.guidanceState.collectAsState()
+    val diagnosticLogs by viewModel.steeringDiagnosticLogs.collectAsState()
+
+    var showDiagnosticPanel by remember { mutableStateOf(false) }
 
     val trackWidthMeters = tractorConfig.trackWidthCm / 100.0
 
@@ -88,10 +95,54 @@ fun MapScreen(viewModel: MainViewModel = viewModel()) {
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                         color = if (guidanceState.isAutoSteerEngaged) Color(0xFF00C853) else MaterialTheme.colorScheme.onSurface
                     )
-                    Text(
-                        text = "Target Steer: ${String.format("%.1f", guidanceState.targetSteeringAngleDegrees)}° | Current: ${String.format("%.1f", guidanceState.currentSteeringAngleDegrees)}°",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = "Target: ${String.format("%.1f", guidanceState.targetSteeringAngleDegrees)}° | Wheel: ${String.format("%.1f", guidanceState.currentSteeringAngleDegrees)}°",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        TextButton(onClick = { showDiagnosticPanel = !showDiagnosticPanel }) {
+                            Text(if (showDiagnosticPanel) "HIDE LOGS" else "STEERING LOGS")
+                        }
+                    }
+                }
+
+                if (showDiagnosticPanel) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(180.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        shape = MaterialTheme.shapes.medium
+                    ) {
+                        Column(modifier = Modifier.padding(8.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("Live Steering Behavior Log", style = MaterialTheme.typography.titleSmall)
+                                TextButton(onClick = { viewModel.clearSteeringDiagnosticLogs() }) {
+                                    Text("Clear")
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            val timeFormat = remember { SimpleDateFormat("HH:mm:ss.SSS", Locale.US) }
+                            LazyColumn(modifier = Modifier.fillMaxSize()) {
+                                items(diagnosticLogs.reversed()) { log ->
+                                    Text(
+                                        text = "[${timeFormat.format(Date(log.timestampMs))}] Spd: %.1f km/h | Hdg: %.0f° | CTE: %+.1f cm | Tgt: %+.1f° | Wheel: %+.1f° | Pwr: %+.0f%% | Curr: %.1fA".format(
+                                            log.speedKmh, log.headingDegrees, log.crossTrackErrorCm,
+                                            log.targetSteeringAngleDegrees, log.currentSteeringAngleDegrees,
+                                            log.motorPowerPercent, log.motorCurrentAmps
+                                        ),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontSize = 11.sp
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
