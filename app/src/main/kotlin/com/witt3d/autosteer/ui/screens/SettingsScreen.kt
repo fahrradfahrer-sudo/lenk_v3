@@ -1100,11 +1100,23 @@ fun SettingsScreen(viewModel: MainViewModel = viewModel()) {
                         ) {
                             Column {
                                 Text("Actual Power: ${String.format("%.1f", motorTelemetry.actualPowerPercent)}%")
-                                Text("Encoder Count: ${motorTelemetry.encoderCount}")
-                                Text("Speed: ${motorTelemetry.speedRpm} RPM")
+                                if (motorConfig.roboteqChannel == 3 && motorTelemetry.encoderCountCh1 != null && motorTelemetry.encoderCountCh2 != null) {
+                                    Text("Encoder Ch1/Ch2: ${motorTelemetry.encoderCountCh1} / ${motorTelemetry.encoderCountCh2}")
+                                } else {
+                                    Text("Encoder Count: ${motorTelemetry.encoderCount}")
+                                }
+                                if (motorConfig.roboteqChannel == 3 && motorTelemetry.speedRpmCh1 != null && motorTelemetry.speedRpmCh2 != null) {
+                                    Text("Speed Ch1/Ch2: ${motorTelemetry.speedRpmCh1} / ${motorTelemetry.speedRpmCh2} RPM")
+                                } else {
+                                    Text("Speed: ${motorTelemetry.speedRpm} RPM")
+                                }
                             }
                             Column {
-                                Text("Current: ${String.format("%.2f", motorTelemetry.currentAmps)} A")
+                                if (motorConfig.roboteqChannel == 3 && motorTelemetry.currentAmpsCh1 != null && motorTelemetry.currentAmpsCh2 != null) {
+                                    Text("Current Ch1/Ch2: ${String.format("%.2f", motorTelemetry.currentAmpsCh1)} / ${String.format("%.2f", motorTelemetry.currentAmpsCh2)} A")
+                                } else {
+                                    Text("Current: ${String.format("%.2f", motorTelemetry.currentAmps)} A")
+                                }
                                 Text("Voltage: ${String.format("%.1f", motorTelemetry.voltageVolts)} V")
                                 Text("Status: ${motorTelemetry.statusMessage}")
                             }

@@ -29,9 +29,15 @@ data class MotorTelemetry(
     val targetPowerPercent: Float = 0f,
     val actualPowerPercent: Float = 0f,
     val encoderCount: Long = 0L,
+    val encoderCountCh1: Long? = null,
+    val encoderCountCh2: Long? = null,
     val currentAmps: Double = 0.0,
+    val currentAmpsCh1: Double? = null,
+    val currentAmpsCh2: Double? = null,
     val voltageVolts: Double = 0.0,
     val speedRpm: Int = 0,
+    val speedRpmCh1: Int? = null,
+    val speedRpmCh2: Int? = null,
     val isConnected: Boolean = false,
     val statusMessage: String = "Disconnected"
 )
