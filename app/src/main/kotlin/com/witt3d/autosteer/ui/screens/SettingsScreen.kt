@@ -10,6 +10,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.witt3d.autosteer.data.models.HeadingSource
 import com.witt3d.autosteer.data.models.MotorControlMode
 import com.witt3d.autosteer.data.models.MotorType
 import com.witt3d.autosteer.data.models.SteeringAlgorithm
@@ -70,6 +71,8 @@ fun SettingsScreen(viewModel: MainViewModel = viewModel()) {
     var kiText by remember(steeringConfig.ki) { mutableStateOf(steeringConfig.ki.toString()) }
     var kdText by remember(steeringConfig.kd) { mutableStateOf(steeringConfig.kd.toString()) }
     var deadbandText by remember(steeringConfig.deadbandDegrees) { mutableStateOf(steeringConfig.deadbandDegrees.toString()) }
+    var minHeadingSpeedText by remember(steeringConfig.minHeadingSpeedKmh) { mutableStateOf(steeringConfig.minHeadingSpeedKmh.toString()) }
+    var maxMotorCurrentCutoffText by remember(steeringConfig.maxMotorCurrentCutoffAmps) { mutableStateOf(steeringConfig.maxMotorCurrentCutoffAmps.toString()) }
 
     // Interactive simulation slider values
     var simRoll by remember { mutableStateOf(0f) }
@@ -193,8 +196,64 @@ fun SettingsScreen(viewModel: MainViewModel = viewModel()) {
         // Steering Algorithm & Motor Parameters Card
         item {
             HardwareSection("Steering Algorithm & Control Parameters") {
-                Text("Select steering algorithm and configure motor control feedback.", style = MaterialTheme.typography.bodyMedium)
+                Text("Select heading fusion, steering algorithm and configure motor feedback / over-current cutoff.", style = MaterialTheme.typography.bodyMedium)
                 Spacer(modifier = Modifier.height(12.dp))
+
+                Text("Heading Source Configuration:", style = MaterialTheme.typography.titleMedium)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilterChip(
+                        selected = steeringConfig.headingSource == HeadingSource.AUTO_FUSED,
+                        onClick = { viewModel.updateSteeringConfig(context, steeringConfig.copy(headingSource = HeadingSource.AUTO_FUSED)) },
+                        label = { Text("Auto / Fused") }
+                    )
+                    FilterChip(
+                        selected = steeringConfig.headingSource == HeadingSource.IMU_ONLY,
+                        onClick = { viewModel.updateSteeringConfig(context, steeringConfig.copy(headingSource = HeadingSource.IMU_ONLY)) },
+                        label = { Text("IMU Only") }
+                    )
+                    FilterChip(
+                        selected = steeringConfig.headingSource == HeadingSource.GPS_COG_ONLY,
+                        onClick = { viewModel.updateSteeringConfig(context, steeringConfig.copy(headingSource = HeadingSource.GPS_COG_ONLY)) },
+                        label = { Text("GPS COG Only") }
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = minHeadingSpeedText,
+                        onValueChange = {
+                            minHeadingSpeedText = it
+                            it.toDoubleOrNull()?.let { spd ->
+                                viewModel.updateSteeringConfig(context, steeringConfig.copy(minHeadingSpeedKmh = spd))
+                            }
+                        },
+                        label = { Text("Min Speed for GPS Heading (km/h)") },
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedTextField(
+                        value = maxMotorCurrentCutoffText,
+                        onValueChange = {
+                            maxMotorCurrentCutoffText = it
+                            it.toDoubleOrNull()?.let { cutoff ->
+                                viewModel.updateSteeringConfig(context, steeringConfig.copy(maxMotorCurrentCutoffAmps = cutoff))
+                            }
+                        },
+                        label = { Text("Max Motor Current Cutoff (A)") },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(16.dp))
 
                 Text("Algorithm Selection:", style = MaterialTheme.typography.titleMedium)
                 Row(

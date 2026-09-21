@@ -10,9 +10,18 @@ enum class MotorControlMode(val displayName: String) {
     PID("PID Closed Loop")
 }
 
+enum class HeadingSource(val displayName: String) {
+    AUTO_FUSED("Auto / Fused (IMU low speed, GPS high speed)"),
+    IMU_ONLY("IMU Only"),
+    GPS_COG_ONLY("GPS Course Over Ground Only")
+}
+
 data class SteeringConfig(
     val algorithm: SteeringAlgorithm = SteeringAlgorithm.PURE_PURSUIT,
     val controlMode: MotorControlMode = MotorControlMode.PASSES_PER_DEGREE,
+    val headingSource: HeadingSource = HeadingSource.AUTO_FUSED,
+    val minHeadingSpeedKmh: Double = 1.5,
+    val maxMotorCurrentCutoffAmps: Double = 15.0,
     val lookaheadDistanceMeters: Double = 4.0,
     val lookaheadSpeedGain: Double = 0.5,
     val stanleyK: Double = 1.0,

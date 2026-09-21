@@ -20,6 +20,9 @@ object TractorRepository {
     // Steering config keys
     private const val KEY_ALGORITHM = "steering_algorithm"
     private const val KEY_CONTROL_MODE = "control_mode"
+    private const val KEY_HEADING_SOURCE = "heading_source"
+    private const val KEY_MIN_HEADING_SPEED = "min_heading_speed"
+    private const val KEY_MAX_MOTOR_CURRENT_CUTOFF = "max_motor_current_cutoff"
     private const val KEY_LOOKAHEAD_DIST = "lookahead_dist"
     private const val KEY_LOOKAHEAD_GAIN = "lookahead_gain"
     private const val KEY_STANLEY_K = "stanley_k"
@@ -72,9 +75,19 @@ object TractorRepository {
             MotorControlMode.PASSES_PER_DEGREE
         }
 
+        val headingSourceStr = prefs.getString(KEY_HEADING_SOURCE, com.witt3d.autosteer.data.models.HeadingSource.AUTO_FUSED.name)
+        val headingSource = try {
+            com.witt3d.autosteer.data.models.HeadingSource.valueOf(headingSourceStr ?: com.witt3d.autosteer.data.models.HeadingSource.AUTO_FUSED.name)
+        } catch (e: Exception) {
+            com.witt3d.autosteer.data.models.HeadingSource.AUTO_FUSED
+        }
+
         return SteeringConfig(
             algorithm = algorithm,
             controlMode = controlMode,
+            headingSource = headingSource,
+            minHeadingSpeedKmh = prefs.getFloat(KEY_MIN_HEADING_SPEED, 1.5f).toDouble(),
+            maxMotorCurrentCutoffAmps = prefs.getFloat(KEY_MAX_MOTOR_CURRENT_CUTOFF, 15.0f).toDouble(),
             lookaheadDistanceMeters = prefs.getFloat(KEY_LOOKAHEAD_DIST, 4.0f).toDouble(),
             lookaheadSpeedGain = prefs.getFloat(KEY_LOOKAHEAD_GAIN, 0.5f).toDouble(),
             stanleyK = prefs.getFloat(KEY_STANLEY_K, 1.0f).toDouble(),
@@ -94,6 +107,9 @@ object TractorRepository {
         prefs.edit()
             .putString(KEY_ALGORITHM, config.algorithm.name)
             .putString(KEY_CONTROL_MODE, config.controlMode.name)
+            .putString(KEY_HEADING_SOURCE, config.headingSource.name)
+            .putFloat(KEY_MIN_HEADING_SPEED, config.minHeadingSpeedKmh.toFloat())
+            .putFloat(KEY_MAX_MOTOR_CURRENT_CUTOFF, config.maxMotorCurrentCutoffAmps.toFloat())
             .putFloat(KEY_LOOKAHEAD_DIST, config.lookaheadDistanceMeters.toFloat())
             .putFloat(KEY_LOOKAHEAD_GAIN, config.lookaheadSpeedGain.toFloat())
             .putFloat(KEY_STANLEY_K, config.stanleyK.toFloat())

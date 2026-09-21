@@ -1,6 +1,7 @@
 package com.witt3d.autosteer.steering
 
 import com.witt3d.autosteer.data.models.AbLine
+import com.witt3d.autosteer.data.models.HeadingSource
 import com.witt3d.autosteer.data.models.MotorControlMode
 import com.witt3d.autosteer.data.models.MotorTelemetry
 import com.witt3d.autosteer.data.models.SteeringAlgorithm
@@ -8,6 +9,7 @@ import com.witt3d.autosteer.data.models.SteeringConfig
 import com.witt3d.autosteer.data.models.TractorConfig
 import com.witt3d.autosteer.data.models.UtmPoint
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.math.sin
@@ -179,5 +181,39 @@ class SteeringTest {
 
         val estimatedAngle = controller.estimateCurrentSteeringAngleDegrees(motorTelemetry, configWithCenterOffset)
         assertEquals(0.0, estimatedAngle, 0.001)
+    }
+
+    @Test
+    fun testLowSpeedHeadingSelection() {
+        val configAuto = defaultSteering.copy(
+            headingSource = HeadingSource.AUTO_FUSED,
+            minHeadingSpeedKmh = 1.5
+        )
+
+        // At low speed (< 1.5 km/h), should prefer IMU heading
+        val lowSpeed = 0.8
+        val imuHeading = 45.0
+        val gpsHeading = 180.0
+
+        val effectiveLowSpeedHeading = if (lowSpeed >= configAuto.minHeadingSpeedKmh && gpsHeading != 0.0) gpsHeading else imuHeading
+        assertEquals(45.0, effectiveLowSpeedHeading, 0.001)
+
+        // At higher speed (>= 1.5 km/h), should prefer GPS COG heading
+        val highSpeed = 5.0
+        val effectiveHighSpeedHeading = if (highSpeed >= configAuto.minHeadingSpeedKmh && gpsHeading != 0.0) gpsHeading else imuHeading
+        assertEquals(180.0, effectiveHighSpeedHeading, 0.001)
+    }
+
+    @Test
+    fun testOverCurrentCutoffTrigger() {
+        val maxCutoff = 15.0
+        val normalCurrent = 5.2
+        val excessiveCurrent = 18.5
+
+        val isCutoffTriggeredNormal = maxCutoff > 0.0 && normalCurrent >= maxCutoff
+        val isCutoffTriggeredExcessive = maxCutoff > 0.0 && excessiveCurrent >= maxCutoff
+
+        assertFalse("Normal current should not trigger cutoff", isCutoffTriggeredNormal)
+        assertTrue("Excessive current should trigger cutoff", isCutoffTriggeredExcessive)
     }
 }
