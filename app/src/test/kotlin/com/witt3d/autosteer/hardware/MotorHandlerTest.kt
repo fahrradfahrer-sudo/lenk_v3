@@ -121,12 +121,25 @@ class MotorHandlerTest {
         assertEquals(12.5, handler.telemetry.value.voltageVolts, 0.01)
         assertEquals(1200, handler.telemetry.value.speedRpm)
 
-        // Test Combined Query Response with Echo ("?C 1:?A 1:?V:?S 1 C=7777 A=30 V=120:128:5040 S=1500")
-        handler.parseHardwareTelemetryResponse("?C 1:?A 1:?V:?S 1 C=7777 A=30 V=120:128:5040 S=1500")
+        // Test Channel-Independent Combined Query Response with Echo ("?C_?A_?V_?S C=7777 A=30 V=120:128:5040 S=1500")
+        handler.parseHardwareTelemetryResponse("?C_?A_?V_?S C=7777 A=30 V=120:128:5040 S=1500")
         assertEquals(7777L, handler.telemetry.value.encoderCount)
         assertEquals(3.0, handler.telemetry.value.currentAmps, 0.01)
         assertEquals(12.8, handler.telemetry.value.voltageVolts, 0.01)
         assertEquals(1500, handler.telemetry.value.speedRpm)
+
+        // Test Channel-Independent Dual-Channel Response ("C=1000:2000 A=20:40 V=120:128:5040 S=500:1500") for Dual Mode (ch=3)
+        handler.updateConfig(MotorConfig(motorType = MotorType.ROBOTEQ, roboteqChannel = 3))
+        handler.parseHardwareTelemetryResponse("C=1000:2000 A=20:40 V=120:128:5040 S=500:1500")
+        assertEquals(1500L, handler.telemetry.value.encoderCount) // Average of 1000 and 2000
+        assertEquals(1000L, handler.telemetry.value.encoderCountCh1)
+        assertEquals(2000L, handler.telemetry.value.encoderCountCh2)
+        assertEquals(3.0, handler.telemetry.value.currentAmps, 0.01) // Average of 2.0 and 4.0
+        assertEquals(2.0, handler.telemetry.value.currentAmpsCh1!!, 0.01)
+        assertEquals(4.0, handler.telemetry.value.currentAmpsCh2!!, 0.01)
+        assertEquals(1000, handler.telemetry.value.speedRpm) // Average of 500 and 1500
+        assertEquals(500, handler.telemetry.value.speedRpmCh1)
+        assertEquals(1500, handler.telemetry.value.speedRpmCh2)
 
         // Test Roboteq Amps (A=15 -> 1.5A)
         handler.parseHardwareTelemetryResponse("A=15")

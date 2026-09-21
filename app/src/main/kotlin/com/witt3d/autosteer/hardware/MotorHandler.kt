@@ -983,10 +983,10 @@ class MotorHandler {
                         if (ch == 3) {
                             commands.add("!G 1 $scaledPower\r")
                             commands.add("!G 2 $scaledPower\r")
-                            commands.add("?C:?A:?V:?S\r")
+                            commands.add("?C_?A_?V_?S\r")
                         } else {
                             commands.add("!G $ch $scaledPower\r")
-                            commands.add("?C $ch:?A $ch:?V:?S $ch\r")
+                            commands.add("?C_?A_?V_?S\r")
                         }
 
                         writeMutex.withLock {
@@ -1141,21 +1141,36 @@ class MotorHandler {
 
                 when (key) {
                     "C", "P" -> {
+                        val (p1, p2) = parseChannelMetricsPair(rawStr)
                         val count = parseChannelMetricValue(rawStr, targetChannel)?.toLong()
                         if (count != null) {
-                            _telemetry.value = _telemetry.value.copy(encoderCount = count)
+                            _telemetry.value = _telemetry.value.copy(
+                                encoderCount = count,
+                                encoderCountCh1 = p1?.toLong(),
+                                encoderCountCh2 = p2?.toLong()
+                            )
                         }
                     }
                     "A" -> {
+                        val (p1, p2) = parseChannelMetricsPair(rawStr)
                         val rawAmps = parseChannelMetricValue(rawStr, targetChannel)
                         if (rawAmps != null) {
-                            _telemetry.value = _telemetry.value.copy(currentAmps = rawAmps / 10.0)
+                            _telemetry.value = _telemetry.value.copy(
+                                currentAmps = rawAmps / 10.0,
+                                currentAmpsCh1 = p1?.let { it / 10.0 },
+                                currentAmpsCh2 = p2?.let { it / 10.0 }
+                            )
                         }
                     }
                     "I" -> {
+                        val (p1, p2) = parseChannelMetricsPair(rawStr)
                         val amps = parseChannelMetricValue(rawStr, targetChannel)
                         if (amps != null) {
-                            _telemetry.value = _telemetry.value.copy(currentAmps = amps)
+                            _telemetry.value = _telemetry.value.copy(
+                                currentAmps = amps,
+                                currentAmpsCh1 = p1,
+                                currentAmpsCh2 = p2
+                            )
                         }
                     }
                     "V" -> {
@@ -1176,9 +1191,14 @@ class MotorHandler {
                         }
                     }
                     "S" -> {
+                        val (p1, p2) = parseChannelMetricsPair(rawStr)
                         val rpm = parseChannelMetricValue(rawStr, targetChannel)?.toInt()
                         if (rpm != null) {
-                            _telemetry.value = _telemetry.value.copy(speedRpm = rpm)
+                            _telemetry.value = _telemetry.value.copy(
+                                speedRpm = rpm,
+                                speedRpmCh1 = p1?.toInt(),
+                                speedRpmCh2 = p2?.toInt()
+                            )
                         }
                     }
                     "T" -> {
@@ -1197,10 +1217,35 @@ class MotorHandler {
     private fun parseChannelMetricValue(raw: String, channel: Int): Double? {
         if (raw.contains(":")) {
             val parts = raw.split(":")
-            val idx = if (channel == 2 && parts.size >= 2) 1 else 0
-            return parts[idx].toDoubleOrNull()
+            if (channel == 3) {
+                // Dual Mode: if both channel values exist, return their average or primary value depending on context.
+                // For metric values like speed/current/counts, parse channel 1 and channel 2.
+                val val1 = parts.getOrNull(0)?.toDoubleOrNull()
+                val val2 = parts.getOrNull(1)?.toDoubleOrNull()
+                return when {
+                    val1 != null && val2 != null -> (val1 + val2) / 2.0
+                    val1 != null -> val1
+                    val2 != null -> val2
+                    else -> null
+                }
+            } else {
+                val idx = if (channel == 2 && parts.size >= 2) 1 else 0
+                return parts[idx].toDoubleOrNull()
+            }
         }
         return raw.toDoubleOrNull()
+    }
+
+    private fun parseChannelMetricsPair(raw: String): Pair<Double?, Double?> {
+        if (raw.contains(":")) {
+            val parts = raw.split(":")
+            val v1 = parts.getOrNull(0)?.toDoubleOrNull()
+            val v2 = parts.getOrNull(1)?.toDoubleOrNull() ?: v1
+            return Pair(v1, v2)
+        } else {
+            val v = raw.toDoubleOrNull()
+            return Pair(v, v)
+        }
     }
 
     private fun parseFirstMetricValue(raw: String): Double? {
