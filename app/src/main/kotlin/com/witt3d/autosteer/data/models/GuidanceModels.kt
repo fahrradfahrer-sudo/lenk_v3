@@ -1,5 +1,8 @@
 package com.witt3d.autosteer.data.models
 
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlin.math.atan2
 import kotlin.math.hypot
 import kotlin.math.sin
@@ -68,7 +71,16 @@ data class SteeringDiagnosticEntry(
     val motorPowerPercent: Float = 0f,
     val motorCurrentAmps: Double = 0.0,
     val statusMessage: String = ""
-)
+) {
+    fun formatLogLine(timeFormat: SimpleDateFormat = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)): String {
+        return "[${timeFormat.format(Date(timestampMs))}] Spd: %.1f km/h | Hdg: %.0f° | CTE: %+.1f cm | Tgt: %+.1f° | Wheel: %+.1f° | Pwr: %+.0f%% | Curr: %.1fA".format(
+            Locale.US,
+            speedKmh, headingDegrees, crossTrackErrorCm,
+            targetSteeringAngleDegrees, currentSteeringAngleDegrees,
+            motorPowerPercent, motorCurrentAmps
+        )
+    }
+}
 
 data class GuidanceState(
     val isAutoSteerEngaged: Boolean = false,

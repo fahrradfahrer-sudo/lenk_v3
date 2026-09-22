@@ -6,9 +6,14 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.widget.Toast
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -22,6 +27,7 @@ import java.util.Locale
 
 @Composable
 fun MapScreen(viewModel: MainViewModel = viewModel()) {
+    val context = LocalContext.current
     val telemetry by viewModel.telemetry.collectAsState()
     val tractorConfig by viewModel.tractorConfig.collectAsState()
     val guidanceState by viewModel.guidanceState.collectAsState()
@@ -122,8 +128,26 @@ fun MapScreen(viewModel: MainViewModel = viewModel()) {
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text("Live Steering Behavior Log", style = MaterialTheme.typography.titleSmall)
-                                TextButton(onClick = { viewModel.clearSteeringDiagnosticLogs() }) {
-                                    Text("Clear")
+                                Row {
+                                    val timeFormat = remember { SimpleDateFormat("HH:mm:ss.SSS", Locale.US) }
+                                    TextButton(onClick = {
+                                        if (diagnosticLogs.isNotEmpty()) {
+                                            val logText = diagnosticLogs.joinToString("\n") { log ->
+                                                log.formatLogLine(timeFormat)
+                                            }
+                                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                            val clip = ClipData.newPlainText("Steering Log", logText)
+                                            clipboard.setPrimaryClip(clip)
+                                            Toast.makeText(context, "Steering log copied to clipboard", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            Toast.makeText(context, "Steering log is empty", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }) {
+                                        Text("COPY")
+                                    }
+                                    TextButton(onClick = { viewModel.clearSteeringDiagnosticLogs() }) {
+                                        Text("CLEAR")
+                                    }
                                 }
                             }
                             Spacer(modifier = Modifier.height(4.dp))
@@ -131,11 +155,7 @@ fun MapScreen(viewModel: MainViewModel = viewModel()) {
                             LazyColumn(modifier = Modifier.fillMaxSize()) {
                                 items(diagnosticLogs.reversed()) { log ->
                                     Text(
-                                        text = "[${timeFormat.format(Date(log.timestampMs))}] Spd: %.1f km/h | Hdg: %.0f° | CTE: %+.1f cm | Tgt: %+.1f° | Wheel: %+.1f° | Pwr: %+.0f%% | Curr: %.1fA".format(
-                                            log.speedKmh, log.headingDegrees, log.crossTrackErrorCm,
-                                            log.targetSteeringAngleDegrees, log.currentSteeringAngleDegrees,
-                                            log.motorPowerPercent, log.motorCurrentAmps
-                                        ),
+                                        text = log.formatLogLine(timeFormat),
                                         style = MaterialTheme.typography.bodySmall,
                                         fontSize = 11.sp
                                     )
