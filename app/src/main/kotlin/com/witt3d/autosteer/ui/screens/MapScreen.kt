@@ -53,7 +53,8 @@ fun MapScreen(viewModel: MainViewModel = viewModel()) {
                 .align(Alignment.TopCenter),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            TelemetryCard("Speed", "${String.format("%.1f", telemetry.speedKmh)} km/h", Modifier.weight(1f))
+            val speedDirText = "${String.format("%.1f", telemetry.speedKmh)} km/h (${if (telemetry.driveDirection == com.witt3d.autosteer.data.models.DriveDirection.REVERSE) "Rev" else "Fwd"})"
+            TelemetryCard("Speed", speedDirText, Modifier.weight(1.2f))
             TelemetryCard("Heading", "${String.format("%.0f", telemetry.headingDegrees)}°", Modifier.weight(1f))
             TelemetryCard("Inclination", "${String.format("%.1f", telemetry.inclinationDegrees)}°", Modifier.weight(1f))
 

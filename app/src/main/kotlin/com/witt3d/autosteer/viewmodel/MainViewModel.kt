@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.witt3d.autosteer.data.models.AbLine
+import com.witt3d.autosteer.data.models.DriveDirection
 import com.witt3d.autosteer.data.models.GpsConfig
 import com.witt3d.autosteer.data.models.GuidanceState
 import com.witt3d.autosteer.data.models.HeadingSource
@@ -16,6 +17,10 @@ import com.witt3d.autosteer.data.models.TelemetryData
 import com.witt3d.autosteer.data.models.TractorConfig
 import com.witt3d.autosteer.data.models.TerminalLogEntry
 import com.witt3d.autosteer.data.models.UtmPoint
+import kotlin.math.abs
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.sin
 import com.witt3d.autosteer.data.repository.GpsRepository
 import com.witt3d.autosteer.data.repository.HardwareRepository
 import com.witt3d.autosteer.data.repository.MotorRepository
@@ -67,6 +72,14 @@ class MainViewModel : ViewModel() {
 
     private val steeringController = SteeringController()
 
+    // Smooth filtering / drive direction state
+    private var filteredUtmX: Double? = null
+    private var filteredUtmY: Double? = null
+    private var filteredHeading: Double? = null
+    private var lastUtmX: Double? = null
+    private var lastUtmY: Double? = null
+    private var currentDriveDirection: DriveDirection = DriveDirection.FORWARD
+
     fun clearSteeringDiagnosticLogs() {
         _steeringDiagnosticLogs.value = emptyList()
     }
@@ -84,16 +97,24 @@ class MainViewModel : ViewModel() {
         // Collect IMU telemetry updates
         viewModelScope.launch {
             imuHandler.telemetry.collect { imuTele ->
+                val config = _steeringConfig.value
                 val currentGpsHeading = gpsHandler.telemetry.value.headingDegrees
                 val currentSpeed = _telemetry.value.speedKmh
-                val effectiveHeading = calculateEffectiveHeading(
+                val rawHeading = calculateEffectiveHeading(
                     imuHeading = imuTele.headingDegrees,
                     gpsHeading = currentGpsHeading,
                     speedKmh = currentSpeed,
-                    config = _steeringConfig.value
+                    config = config
                 )
+
+                val smoothHeading = if (config.enableFiltering) {
+                    smoothAngle(filteredHeading, rawHeading, config.headingSmoothingAlpha).also { filteredHeading = it }
+                } else {
+                    rawHeading
+                }
+
                 _telemetry.value = _telemetry.value.copy(
-                    headingDegrees = effectiveHeading,
+                    headingDegrees = smoothHeading,
                     inclinationDegrees = imuTele.inclinationDegrees,
                     pitchDegrees = imuTele.pitchDegrees,
                     accelX = imuTele.accelX,
@@ -106,22 +127,68 @@ class MainViewModel : ViewModel() {
         // Collect GPS telemetry updates
         viewModelScope.launch {
             gpsHandler.telemetry.collect { gpsTele ->
+                val config = _steeringConfig.value
                 val currentImuHeading = imuHandler.telemetry.value.headingDegrees
-                val effectiveHeading = calculateEffectiveHeading(
+                val rawHeading = calculateEffectiveHeading(
                     imuHeading = currentImuHeading,
                     gpsHeading = gpsTele.headingDegrees,
                     speedKmh = gpsTele.speedKmh,
-                    config = _steeringConfig.value
+                    config = config
                 )
+
+                val smoothHeading = if (config.enableFiltering) {
+                    smoothAngle(filteredHeading, rawHeading, config.headingSmoothingAlpha).also { filteredHeading = it }
+                } else {
+                    rawHeading
+                }
+
+                // Smooth UTM coordinates
+                var rawX = gpsTele.utmX
+                var rawY = gpsTele.utmY
+
+                if (rawX != 0.0 && rawY != 0.0) {
+                    // Update Drive Direction based on position delta vs heading
+                    val prevX = lastUtmX
+                    val prevY = lastUtmY
+                    if (prevX != null && prevY != null && gpsTele.speedKmh >= 0.8) {
+                        val dx = rawX - prevX
+                        val dy = rawY - prevY
+                        val movementDist = hypot(dx, dy)
+                        if (movementDist >= 0.1) {
+                            var movementHeading = Math.toDegrees(atan2(dx, dy))
+                            if (movementHeading < 0) movementHeading += 360.0
+
+                            var angleDiff = movementHeading - smoothHeading
+                            while (angleDiff > 180.0) angleDiff -= 360.0
+                            while (angleDiff < -180.0) angleDiff += 360.0
+
+                            currentDriveDirection = if (abs(angleDiff) > 90.0) DriveDirection.REVERSE else DriveDirection.FORWARD
+                        }
+                    }
+                    lastUtmX = rawX
+                    lastUtmY = rawY
+
+                    if (config.enableFiltering) {
+                        val alpha = config.positionSmoothingAlpha
+                        val fx = filteredUtmX?.let { it + alpha * (rawX - it) } ?: rawX
+                        val fy = filteredUtmY?.let { it + alpha * (rawY - it) } ?: rawY
+                        filteredUtmX = fx
+                        filteredUtmY = fy
+                        rawX = fx
+                        rawY = fy
+                    }
+                }
+
                 _telemetry.value = _telemetry.value.copy(
                     latitude = gpsTele.latitude,
                     longitude = gpsTele.longitude,
-                    utmX = gpsTele.utmX,
-                    utmY = gpsTele.utmY,
+                    utmX = rawX,
+                    utmY = rawY,
                     speedKmh = gpsTele.speedKmh,
-                    headingDegrees = effectiveHeading,
+                    headingDegrees = smoothHeading,
                     fixStatus = gpsTele.fixStatus,
-                    accuracyMeters = gpsTele.accuracyMeters
+                    accuracyMeters = gpsTele.accuracyMeters,
+                    driveDirection = currentDriveDirection
                 )
             }
         }
@@ -146,7 +213,7 @@ class MainViewModel : ViewModel() {
         config: SteeringConfig
     ): Double {
         return when (config.headingSource) {
-            HeadingSource.IMU_ONLY -> if (imuHeading != 0.0) imuHeading else gpsHeading
+            HeadingSource.IMU_ONLY -> imuHeading
             HeadingSource.GPS_COG_ONLY -> if (gpsHeading != 0.0) gpsHeading else imuHeading
             HeadingSource.AUTO_FUSED -> {
                 if (speedKmh >= config.minHeadingSpeedKmh && gpsHeading != 0.0) {
@@ -158,6 +225,17 @@ class MainViewModel : ViewModel() {
                 }
             }
         }
+    }
+
+    private fun smoothAngle(prev: Double?, current: Double, alpha: Double): Double {
+        if (prev == null) return current
+        var diff = current - prev
+        while (diff > 180.0) diff -= 360.0
+        while (diff < -180.0) diff += 360.0
+        var result = prev + alpha * diff
+        while (result >= 360.0) result -= 360.0
+        while (result < 0.0) result += 360.0
+        return result
     }
 
     fun loadPersistedConfigs(context: Context) {
@@ -215,7 +293,8 @@ class MainViewModel : ViewModel() {
                 speedKmh = currentTele.speedKmh,
                 abLine = activeLine,
                 tractorConfig = currentTractor,
-                steeringConfig = currentSteering
+                steeringConfig = currentSteering,
+                driveDirection = currentTele.driveDirection
             )
 
             val motorPower = steeringController.calculateMotorPowerPercent(
@@ -247,7 +326,8 @@ class MainViewModel : ViewModel() {
                     currentSteeringAngleDegrees = currentSteerAngle,
                     motorPowerPercent = motorPower,
                     motorCurrentAmps = currentMotorTelemetry.currentAmps,
-                    statusMessage = statusMsg
+                    statusMessage = statusMsg,
+                    driveDirection = currentTele.driveDirection
                 )
             )
         } else {

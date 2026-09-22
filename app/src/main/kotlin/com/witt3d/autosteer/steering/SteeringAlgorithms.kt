@@ -24,14 +24,15 @@ object SteeringAlgorithms {
         speedKmh: Double,
         abLine: AbLine,
         tractorConfig: TractorConfig,
-        steeringConfig: SteeringConfig
+        steeringConfig: SteeringConfig,
+        driveDirection: com.witt3d.autosteer.data.models.DriveDirection = com.witt3d.autosteer.data.models.DriveDirection.FORWARD
     ): Double {
         return when (steeringConfig.algorithm) {
             SteeringAlgorithm.PURE_PURSUIT -> calculatePurePursuit(
-                groundAxleUtm, headingDegrees, speedKmh, abLine, tractorConfig, steeringConfig
+                groundAxleUtm, headingDegrees, speedKmh, abLine, tractorConfig, steeringConfig, driveDirection
             )
             SteeringAlgorithm.STANLEY -> calculateStanley(
-                groundAxleUtm, headingDegrees, speedKmh, abLine, tractorConfig, steeringConfig
+                groundAxleUtm, headingDegrees, speedKmh, abLine, tractorConfig, steeringConfig, driveDirection
             )
         }
     }
@@ -45,7 +46,8 @@ object SteeringAlgorithms {
         speedKmh: Double,
         abLine: AbLine,
         tractorConfig: TractorConfig,
-        steeringConfig: SteeringConfig
+        steeringConfig: SteeringConfig,
+        driveDirection: com.witt3d.autosteer.data.models.DriveDirection = com.witt3d.autosteer.data.models.DriveDirection.FORWARD
     ): Double {
         val speedMps = max(speedKmh / 3.6, 0.0)
         val lookaheadDist = max(
@@ -53,18 +55,30 @@ object SteeringAlgorithms {
             1.0
         )
 
-        // Line vector
         val lineLen = abLine.lengthMeters
         if (lineLen < 1e-6) return 0.0
         val lineUx = abLine.dx / lineLen
         val lineUy = abLine.dy / lineLen
 
+        // Effective motion heading based on drive direction
+        val motionHeading = if (driveDirection == com.witt3d.autosteer.data.models.DriveDirection.REVERSE) {
+            (headingDegrees + 180.0) % 360.0
+        } else {
+            headingDegrees
+        }
+
+        var headingDiff = motionHeading - abLine.headingDegrees
+        while (headingDiff > 180.0) headingDiff -= 360.0
+        while (headingDiff < -180.0) headingDiff += 360.0
+
+        val lineDir = if (abs(headingDiff) > 90.0) -1.0 else 1.0
+
         // Project axle position on AB line
         val projPoint = abLine.projectPoint(groundAxleUtm)
 
-        // Target lookahead point on AB line ahead of projection
-        val targetX = projPoint.x + lineUx * lookaheadDist
-        val targetY = projPoint.y + lineUy * lookaheadDist
+        // Target lookahead point on AB line along path direction
+        val targetX = projPoint.x + lineUx * lookaheadDist * lineDir
+        val targetY = projPoint.y + lineUy * lookaheadDist * lineDir
 
         // Transform target point to local tractor frame (X = Right, Y = Forward)
         val dxUtm = targetX - groundAxleUtm.x
@@ -77,8 +91,11 @@ object SteeringAlgorithms {
         val actualLookaheadDist = max(hypot(localX, localY), 0.1)
 
         val wheelbaseM = tractorConfig.wheelbaseCm / 100.0
-        // Curvature = 2 * localX / (L^2)
-        val curvature = (2.0 * localX) / (actualLookaheadDist * actualLookaheadDist)
+        var curvature = (2.0 * localX) / (actualLookaheadDist * actualLookaheadDist)
+
+        if (driveDirection == com.witt3d.autosteer.data.models.DriveDirection.REVERSE) {
+            curvature = -curvature
+        }
 
         var steeringAngleDeg = Math.toDegrees(atan(curvature * wheelbaseM))
 
@@ -98,23 +115,39 @@ object SteeringAlgorithms {
         speedKmh: Double,
         abLine: AbLine,
         tractorConfig: TractorConfig,
-        steeringConfig: SteeringConfig
+        steeringConfig: SteeringConfig,
+        driveDirection: com.witt3d.autosteer.data.models.DriveDirection = com.witt3d.autosteer.data.models.DriveDirection.FORWARD
     ): Double {
         val speedMps = max(speedKmh / 3.6, 0.5) // minimum 0.5 m/s to prevent division by near zero
 
-        // Heading error (tractor heading - line heading) in degrees, normalized to [-180, 180]
-        var headingErrorDeg = headingDegrees - abLine.headingDegrees
+        val motionHeading = if (driveDirection == com.witt3d.autosteer.data.models.DriveDirection.REVERSE) {
+            (headingDegrees + 180.0) % 360.0
+        } else {
+            headingDegrees
+        }
+
+        var headingDiff = motionHeading - abLine.headingDegrees
+        while (headingDiff > 180.0) headingDiff -= 360.0
+        while (headingDiff < -180.0) headingDiff += 360.0
+
+        val lineDir = if (abs(headingDiff) > 90.0) -1.0 else 1.0
+        val effectiveLineHeading = if (lineDir < 0.0) (abLine.headingDegrees + 180.0) % 360.0 else abLine.headingDegrees
+
+        var headingErrorDeg = motionHeading - effectiveLineHeading
         while (headingErrorDeg > 180.0) headingErrorDeg -= 360.0
         while (headingErrorDeg < -180.0) headingErrorDeg += 360.0
 
-        // Signed cross-track error in meters (positive = tractor is right of AB line)
-        val cteMeters = abLine.calculateCrossTrackErrorMeters(groundAxleUtm)
+        val rawCteMeters = abLine.calculateCrossTrackErrorMeters(groundAxleUtm)
+        val effectiveCteMeters = rawCteMeters * lineDir
 
-        // Stanley control law: delta = - (heading_gain * theta_e) + atan(- k * cte / v)
-        val crossTrackSteerRad = atan2(-steeringConfig.stanleyK * cteMeters, speedMps)
+        val crossTrackSteerRad = atan2(-steeringConfig.stanleyK * effectiveCteMeters, speedMps)
         val crossTrackSteerDeg = Math.toDegrees(crossTrackSteerRad)
 
         var totalSteerDeg = -(steeringConfig.stanleyHeadingGain * headingErrorDeg) + crossTrackSteerDeg
+
+        if (driveDirection == com.witt3d.autosteer.data.models.DriveDirection.REVERSE) {
+            totalSteerDeg = -totalSteerDeg
+        }
 
         val maxAngle = tractorConfig.maxSteeringAngleDegrees
         totalSteerDeg = totalSteerDeg.coerceIn(-maxAngle, maxAngle)

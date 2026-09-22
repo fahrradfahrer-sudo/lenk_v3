@@ -238,7 +238,7 @@ class SteeringTest {
 
         val formatted1 = entry1.formatLogLine(dateFormat)
         val expectedTimeStr = dateFormat.format(java.util.Date(timestamp))
-        val expected1 = "[$expectedTimeStr] Spd: 5.2 km/h | Hdg: 180° | CTE: +2.1 cm | Tgt: +1.5° | Wheel: +1.2° | Pwr: +25% | Curr: 1.4A"
+        val expected1 = "[$expectedTimeStr] Spd: 5.2 km/h (F) | Hdg: 180° | CTE: +2.1 cm | Tgt: +1.5° | Wheel: +1.2° | Pwr: +25% | Curr: 1.4A"
         assertEquals(expected1, formatted1)
 
         val entry2 = SteeringDiagnosticEntry(

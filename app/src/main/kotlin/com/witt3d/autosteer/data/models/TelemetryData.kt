@@ -21,5 +21,6 @@ data class TelemetryData(
     val utmY: Double = 0.0,
     val accelX: Double = 0.0,
     val accelY: Double = 0.0,
-    val accelZ: Double = 0.0
+    val accelZ: Double = 0.0,
+    val driveDirection: DriveDirection = DriveDirection.FORWARD
 )

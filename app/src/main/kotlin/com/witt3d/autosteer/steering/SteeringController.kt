@@ -24,8 +24,11 @@ class SteeringController {
         steeringConfig: SteeringConfig
     ): Double {
         val passesPerDegree = if (steeringConfig.passesPerDegree != 0) steeringConfig.passesPerDegree else 300
-        val relativeEncoder = motorTelemetry.encoderCount - steeringConfig.encoderCenterOffset
-        return relativeEncoder.toDouble() / passesPerDegree.toDouble()
+        var relativeEncoder = (motorTelemetry.encoderCount - steeringConfig.encoderCenterOffset).toDouble()
+        if (steeringConfig.invertEncoderSign) {
+            relativeEncoder = -relativeEncoder
+        }
+        return relativeEncoder / passesPerDegree.toDouble()
     }
 
     /**
@@ -45,11 +48,10 @@ class SteeringController {
 
         val maxPower = steeringConfig.maxOutputPowerPercent.toFloat()
 
-        return when (steeringConfig.controlMode) {
+        var rawPower = when (steeringConfig.controlMode) {
             MotorControlMode.PASSES_PER_DEGREE -> {
                 // Passes per degree proportional control (Cerea style)
-                val power = (errorDegrees * steeringConfig.kp).toFloat()
-                power.coerceIn(-maxPower, maxPower)
+                (errorDegrees * steeringConfig.kp).toFloat()
             }
             MotorControlMode.PID -> {
                 val currentTimeMs = System.currentTimeMillis()
@@ -67,8 +69,14 @@ class SteeringController {
                         steeringConfig.ki * integralError +
                         steeringConfig.kd * derivative
 
-                output.toFloat().coerceIn(-maxPower, maxPower)
+                output.toFloat()
             }
         }
+
+        if (steeringConfig.invertMotorOutput) {
+            rawPower = -rawPower
+        }
+
+        return rawPower.coerceIn(-maxPower, maxPower)
     }
 }
