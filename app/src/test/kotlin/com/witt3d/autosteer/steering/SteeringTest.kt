@@ -6,12 +6,15 @@ import com.witt3d.autosteer.data.models.MotorControlMode
 import com.witt3d.autosteer.data.models.MotorTelemetry
 import com.witt3d.autosteer.data.models.SteeringAlgorithm
 import com.witt3d.autosteer.data.models.SteeringConfig
+import com.witt3d.autosteer.data.models.SteeringDiagnosticEntry
 import com.witt3d.autosteer.data.models.TractorConfig
 import com.witt3d.autosteer.data.models.UtmPoint
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.text.SimpleDateFormat
+import java.util.Locale
 import kotlin.math.sin
 
 class SteeringTest {
@@ -215,5 +218,46 @@ class SteeringTest {
 
         assertFalse("Normal current should not trigger cutoff", isCutoffTriggeredNormal)
         assertTrue("Excessive current should trigger cutoff", isCutoffTriggeredExcessive)
+    }
+
+    @Test
+    fun testSteeringDiagnosticEntryFormatLogLine() {
+        val dateFormat = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
+        val timestamp = 1700000000000L // Specific fixed timestamp
+
+        val entry1 = SteeringDiagnosticEntry(
+            timestampMs = timestamp,
+            speedKmh = 5.2,
+            headingDegrees = 180.0,
+            crossTrackErrorCm = 2.1,
+            targetSteeringAngleDegrees = 1.5,
+            currentSteeringAngleDegrees = 1.2,
+            motorPowerPercent = 25.0f,
+            motorCurrentAmps = 1.4
+        )
+
+        val formatted1 = entry1.formatLogLine(dateFormat)
+        val expectedTimeStr = dateFormat.format(java.util.Date(timestamp))
+        val expected1 = "[$expectedTimeStr] Spd: 5.2 km/h | Hdg: 180° | CTE: +2.1 cm | Tgt: +1.5° | Wheel: +1.2° | Pwr: +25% | Curr: 1.4A"
+        assertEquals(expected1, formatted1)
+
+        val entry2 = SteeringDiagnosticEntry(
+            timestampMs = timestamp + 1000L,
+            speedKmh = 3.0,
+            headingDegrees = 90.0,
+            crossTrackErrorCm = -3.5,
+            targetSteeringAngleDegrees = -2.0,
+            currentSteeringAngleDegrees = -1.8,
+            motorPowerPercent = -40.0f,
+            motorCurrentAmps = 2.8
+        )
+
+        val logsList = listOf(entry1, entry2)
+        val logText = logsList.joinToString("\n") { it.formatLogLine(dateFormat) }
+
+        val lines = logText.split("\n")
+        assertEquals(2, lines.size)
+        assertTrue(lines[0].contains("CTE: +2.1 cm"))
+        assertTrue(lines[1].contains("CTE: -3.5 cm"))
     }
 }
