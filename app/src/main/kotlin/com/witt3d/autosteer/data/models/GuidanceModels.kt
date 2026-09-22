@@ -70,12 +70,14 @@ data class SteeringDiagnosticEntry(
     val currentSteeringAngleDegrees: Double = 0.0,
     val motorPowerPercent: Float = 0f,
     val motorCurrentAmps: Double = 0.0,
-    val statusMessage: String = ""
+    val statusMessage: String = "",
+    val driveDirection: DriveDirection = DriveDirection.FORWARD
 ) {
     fun formatLogLine(timeFormat: SimpleDateFormat = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)): String {
-        return "[${timeFormat.format(Date(timestampMs))}] Spd: %.1f km/h | Hdg: %.0f° | CTE: %+.1f cm | Tgt: %+.1f° | Wheel: %+.1f° | Pwr: %+.0f%% | Curr: %.1fA".format(
+        val dirChar = if (driveDirection == DriveDirection.REVERSE) "R" else "F"
+        return "[${timeFormat.format(Date(timestampMs))}] Spd: %.1f km/h (%s) | Hdg: %.0f° | CTE: %+.1f cm | Tgt: %+.1f° | Wheel: %+.1f° | Pwr: %+.0f%% | Curr: %.1fA".format(
             Locale.US,
-            speedKmh, headingDegrees, crossTrackErrorCm,
+            speedKmh, dirChar, headingDegrees, crossTrackErrorCm,
             targetSteeringAngleDegrees, currentSteeringAngleDegrees,
             motorPowerPercent, motorCurrentAmps
         )

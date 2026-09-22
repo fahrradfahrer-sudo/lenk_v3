@@ -16,6 +16,11 @@ enum class HeadingSource(val displayName: String) {
     GPS_COG_ONLY("GPS Course Over Ground Only")
 }
 
+enum class DriveDirection(val displayName: String) {
+    FORWARD("Forward"),
+    REVERSE("Reverse")
+}
+
 data class SteeringConfig(
     val algorithm: SteeringAlgorithm = SteeringAlgorithm.PURE_PURSUIT,
     val controlMode: MotorControlMode = MotorControlMode.PASSES_PER_DEGREE,
@@ -32,5 +37,10 @@ data class SteeringConfig(
     val ki: Double = 0.0,
     val kd: Double = 0.1,
     val deadbandDegrees: Double = 0.5,
-    val maxOutputPowerPercent: Int = 100
+    val maxOutputPowerPercent: Int = 100,
+    val invertEncoderSign: Boolean = false,
+    val invertMotorOutput: Boolean = false,
+    val enableFiltering: Boolean = true,
+    val headingSmoothingAlpha: Double = 0.3,
+    val positionSmoothingAlpha: Double = 0.5
 )

@@ -73,6 +73,8 @@ fun SettingsScreen(viewModel: MainViewModel = viewModel()) {
     var deadbandText by remember(steeringConfig.deadbandDegrees) { mutableStateOf(steeringConfig.deadbandDegrees.toString()) }
     var minHeadingSpeedText by remember(steeringConfig.minHeadingSpeedKmh) { mutableStateOf(steeringConfig.minHeadingSpeedKmh.toString()) }
     var maxMotorCurrentCutoffText by remember(steeringConfig.maxMotorCurrentCutoffAmps) { mutableStateOf(steeringConfig.maxMotorCurrentCutoffAmps.toString()) }
+    var headingAlphaText by remember(steeringConfig.headingSmoothingAlpha) { mutableStateOf(steeringConfig.headingSmoothingAlpha.toString()) }
+    var positionAlphaText by remember(steeringConfig.positionSmoothingAlpha) { mutableStateOf(steeringConfig.positionSmoothingAlpha.toString()) }
 
     // Interactive simulation slider values
     var simRoll by remember { mutableStateOf(0f) }
@@ -255,6 +257,56 @@ fun SettingsScreen(viewModel: MainViewModel = viewModel()) {
                 HorizontalDivider()
                 Spacer(modifier = Modifier.height(16.dp))
 
+                Text("Position & Heading Filtering / Smoothing:", style = MaterialTheme.typography.titleMedium)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Enable Filtering")
+                    Switch(
+                        checked = steeringConfig.enableFiltering,
+                        onCheckedChange = { enable ->
+                            viewModel.updateSteeringConfig(context, steeringConfig.copy(enableFiltering = enable))
+                        }
+                    )
+                }
+
+                if (steeringConfig.enableFiltering) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = headingAlphaText,
+                            onValueChange = {
+                                headingAlphaText = it
+                                it.toDoubleOrNull()?.let { alpha ->
+                                    viewModel.updateSteeringConfig(context, steeringConfig.copy(headingSmoothingAlpha = alpha.coerceIn(0.01, 1.0)))
+                                }
+                            },
+                            label = { Text("Heading Smoothing Alpha (0.01 - 1.0)") },
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = positionAlphaText,
+                            onValueChange = {
+                                positionAlphaText = it
+                                it.toDoubleOrNull()?.let { alpha ->
+                                    viewModel.updateSteeringConfig(context, steeringConfig.copy(positionSmoothingAlpha = alpha.coerceIn(0.01, 1.0)))
+                                }
+                            },
+                            label = { Text("Position Smoothing Alpha (0.01 - 1.0)") },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(16.dp))
+
                 Text("Algorithm Selection:", style = MaterialTheme.typography.titleMedium)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -334,6 +386,36 @@ fun SettingsScreen(viewModel: MainViewModel = viewModel()) {
                             modifier = Modifier.weight(1f)
                         )
                     }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Invert Wheel Encoder Sign")
+                    Switch(
+                        checked = steeringConfig.invertEncoderSign,
+                        onCheckedChange = { invert ->
+                            viewModel.updateSteeringConfig(context, steeringConfig.copy(invertEncoderSign = invert))
+                        }
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Invert Motor Steering Power Output")
+                    Switch(
+                        checked = steeringConfig.invertMotorOutput,
+                        onCheckedChange = { invert ->
+                            viewModel.updateSteeringConfig(context, steeringConfig.copy(invertMotorOutput = invert))
+                        }
+                    )
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))

@@ -34,6 +34,11 @@ object TractorRepository {
     private const val KEY_KD = "kd"
     private const val KEY_DEADBAND = "deadband_degrees"
     private const val KEY_MAX_OUTPUT_POWER = "max_output_power"
+    private const val KEY_INVERT_ENCODER_SIGN = "invert_encoder_sign"
+    private const val KEY_INVERT_MOTOR_OUTPUT = "invert_motor_output"
+    private const val KEY_ENABLE_FILTERING = "enable_filtering"
+    private const val KEY_HEADING_SMOOTHING_ALPHA = "heading_smoothing_alpha"
+    private const val KEY_POSITION_SMOOTHING_ALPHA = "position_smoothing_alpha"
 
     fun loadTractorConfig(context: Context): TractorConfig {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -98,7 +103,12 @@ object TractorRepository {
             ki = prefs.getFloat(KEY_KI, 0.0f).toDouble(),
             kd = prefs.getFloat(KEY_KD, 0.1f).toDouble(),
             deadbandDegrees = prefs.getFloat(KEY_DEADBAND, 0.5f).toDouble(),
-            maxOutputPowerPercent = prefs.getInt(KEY_MAX_OUTPUT_POWER, 100)
+            maxOutputPowerPercent = prefs.getInt(KEY_MAX_OUTPUT_POWER, 100),
+            invertEncoderSign = prefs.getBoolean(KEY_INVERT_ENCODER_SIGN, false),
+            invertMotorOutput = prefs.getBoolean(KEY_INVERT_MOTOR_OUTPUT, false),
+            enableFiltering = prefs.getBoolean(KEY_ENABLE_FILTERING, true),
+            headingSmoothingAlpha = prefs.getFloat(KEY_HEADING_SMOOTHING_ALPHA, 0.3f).toDouble(),
+            positionSmoothingAlpha = prefs.getFloat(KEY_POSITION_SMOOTHING_ALPHA, 0.5f).toDouble()
         )
     }
 
@@ -121,6 +131,11 @@ object TractorRepository {
             .putFloat(KEY_KD, config.kd.toFloat())
             .putFloat(KEY_DEADBAND, config.deadbandDegrees.toFloat())
             .putInt(KEY_MAX_OUTPUT_POWER, config.maxOutputPowerPercent)
+            .putBoolean(KEY_INVERT_ENCODER_SIGN, config.invertEncoderSign)
+            .putBoolean(KEY_INVERT_MOTOR_OUTPUT, config.invertMotorOutput)
+            .putBoolean(KEY_ENABLE_FILTERING, config.enableFiltering)
+            .putFloat(KEY_HEADING_SMOOTHING_ALPHA, config.headingSmoothingAlpha.toFloat())
+            .putFloat(KEY_POSITION_SMOOTHING_ALPHA, config.positionSmoothingAlpha.toFloat())
             .apply()
     }
 }
