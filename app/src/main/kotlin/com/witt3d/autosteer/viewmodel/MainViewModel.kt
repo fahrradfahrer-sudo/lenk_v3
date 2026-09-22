@@ -17,6 +17,7 @@ import com.witt3d.autosteer.data.models.TelemetryData
 import com.witt3d.autosteer.data.models.TractorConfig
 import com.witt3d.autosteer.data.models.TerminalLogEntry
 import com.witt3d.autosteer.data.models.UtmPoint
+import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -197,6 +198,8 @@ class MainViewModel : ViewModel() {
             imuHandler.connect()
         }
 
+        logSteeringConfigParameters()
+
         // AutoSteer Control Loop (20Hz = 50ms)
         viewModelScope.launch {
             while (isActive) {
@@ -204,6 +207,31 @@ class MainViewModel : ViewModel() {
                 delay(50)
             }
         }
+    }
+
+    fun logSteeringConfigParameters() {
+        val config = _steeringConfig.value
+        val tractor = _tractorConfig.value
+        val summary = "Algo: %s | Mode: %s | StanleyK: %.1f | StanleyHdgGain: %.1f | Kp: %.1f | Ki: %.1f | Kd: %.1f | MinPwr: %d%% | MaxPwr: %d%% | MaxSteer: %.0f° | EncInvert: %b | MtrInvert: %b".format(
+            Locale.US,
+            config.algorithm.displayName,
+            config.controlMode.displayName,
+            config.stanleyK,
+            config.stanleyHeadingGain,
+            config.kp,
+            config.ki,
+            config.kd,
+            config.minMotorOutputPowerPercent,
+            config.maxOutputPowerPercent,
+            tractor.maxSteeringAngleDegrees,
+            config.invertEncoderSign,
+            config.invertMotorOutput
+        )
+        addSteeringDiagnosticEntry(
+            com.witt3d.autosteer.data.models.SteeringDiagnosticEntry(
+                configSummary = summary
+            )
+        )
     }
 
     private fun calculateEffectiveHeading(
@@ -241,6 +269,7 @@ class MainViewModel : ViewModel() {
     fun loadPersistedConfigs(context: Context) {
         _tractorConfig.value = TractorRepository.loadTractorConfig(context)
         _steeringConfig.value = TractorRepository.loadSteeringConfig(context)
+        logSteeringConfigParameters()
     }
 
     private fun processAutoSteerLoop() {
@@ -487,12 +516,14 @@ class MainViewModel : ViewModel() {
     fun updateTractorConfig(context: Context, newConfig: TractorConfig) {
         TractorRepository.saveTractorConfig(context, newConfig)
         _tractorConfig.value = newConfig
+        logSteeringConfigParameters()
     }
 
     fun updateSteeringConfig(context: Context, newConfig: SteeringConfig) {
         TractorRepository.saveSteeringConfig(context, newConfig)
         _steeringConfig.value = newConfig
         steeringController.resetPid()
+        logSteeringConfigParameters()
     }
 
     fun setSteeringCenter(context: Context) {
@@ -544,6 +575,7 @@ class MainViewModel : ViewModel() {
             disengageAutoSteer()
         } else {
             if (current.abLine != null && current.abLine.lengthMeters >= 0.1) {
+                logSteeringConfigParameters()
                 _guidanceState.value = current.copy(
                     isAutoSteerEngaged = true,
                     steeringStatusMessage = "AUTOSTEER ENGAGED"

@@ -71,9 +71,13 @@ data class SteeringDiagnosticEntry(
     val motorPowerPercent: Float = 0f,
     val motorCurrentAmps: Double = 0.0,
     val statusMessage: String = "",
-    val driveDirection: DriveDirection = DriveDirection.FORWARD
+    val driveDirection: DriveDirection = DriveDirection.FORWARD,
+    val configSummary: String? = null
 ) {
     fun formatLogLine(timeFormat: SimpleDateFormat = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)): String {
+        if (configSummary != null) {
+            return "[${timeFormat.format(Date(timestampMs))}] [CONFIG] $configSummary"
+        }
         val dirChar = if (driveDirection == DriveDirection.REVERSE) "R" else "F"
         return "[${timeFormat.format(Date(timestampMs))}] Spd: %.1f km/h (%s) | Hdg: %.0f° | CTE: %+.1f cm | Tgt: %+.1f° | Wheel: %+.1f° | Pwr: %+.0f%% | Curr: %.1fA".format(
             Locale.US,
