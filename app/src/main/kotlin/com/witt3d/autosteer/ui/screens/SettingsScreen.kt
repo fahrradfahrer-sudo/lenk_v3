@@ -71,6 +71,7 @@ fun SettingsScreen(viewModel: MainViewModel = viewModel()) {
     var kiText by remember(steeringConfig.ki) { mutableStateOf(steeringConfig.ki.toString()) }
     var kdText by remember(steeringConfig.kd) { mutableStateOf(steeringConfig.kd.toString()) }
     var deadbandText by remember(steeringConfig.deadbandDegrees) { mutableStateOf(steeringConfig.deadbandDegrees.toString()) }
+    var minMotorPowerText by remember(steeringConfig.minMotorOutputPowerPercent) { mutableStateOf(steeringConfig.minMotorOutputPowerPercent.toString()) }
     var minHeadingSpeedText by remember(steeringConfig.minHeadingSpeedKmh) { mutableStateOf(steeringConfig.minHeadingSpeedKmh.toString()) }
     var maxMotorCurrentCutoffText by remember(steeringConfig.maxMotorCurrentCutoffAmps) { mutableStateOf(steeringConfig.maxMotorCurrentCutoffAmps.toString()) }
     var headingAlphaText by remember(steeringConfig.headingSmoothingAlpha) { mutableStateOf(steeringConfig.headingSmoothingAlpha.toString()) }
@@ -453,7 +454,7 @@ fun SettingsScreen(viewModel: MainViewModel = viewModel()) {
                                 viewModel.updateSteeringConfig(context, steeringConfig.copy(passesPerDegree = ppd))
                             }
                         },
-                        label = { Text("Passes per Degree (Encoder)") },
+                        label = { Text("Passes per Degree") },
                         modifier = Modifier.weight(1f)
                     )
                     OutlinedTextField(
@@ -465,6 +466,17 @@ fun SettingsScreen(viewModel: MainViewModel = viewModel()) {
                             }
                         },
                         label = { Text("Deadband (°)") },
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedTextField(
+                        value = minMotorPowerText,
+                        onValueChange = {
+                            minMotorPowerText = it
+                            it.toIntOrNull()?.let { mp ->
+                                viewModel.updateSteeringConfig(context, steeringConfig.copy(minMotorOutputPowerPercent = mp.coerceIn(0, 100)))
+                            }
+                        },
+                        label = { Text("Min Power (%)") },
                         modifier = Modifier.weight(1f)
                     )
                 }

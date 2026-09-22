@@ -118,7 +118,7 @@ object SteeringAlgorithms {
         steeringConfig: SteeringConfig,
         driveDirection: com.witt3d.autosteer.data.models.DriveDirection = com.witt3d.autosteer.data.models.DriveDirection.FORWARD
     ): Double {
-        val speedMps = max(speedKmh / 3.6, 0.5) // minimum 0.5 m/s to prevent division by near zero
+        val speedMps = max(speedKmh / 3.6, 0.1) // minimum 0.1 m/s to prevent division by near zero while preserving low-speed responsiveness
 
         val motionHeading = if (driveDirection == com.witt3d.autosteer.data.models.DriveDirection.REVERSE) {
             (headingDegrees + 180.0) % 360.0

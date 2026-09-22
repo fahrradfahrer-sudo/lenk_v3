@@ -4,6 +4,7 @@ import com.witt3d.autosteer.data.models.MotorControlMode
 import com.witt3d.autosteer.data.models.MotorTelemetry
 import com.witt3d.autosteer.data.models.SteeringConfig
 import kotlin.math.abs
+import kotlin.math.sign
 
 class SteeringController {
     private var integralError = 0.0
@@ -46,7 +47,8 @@ class SteeringController {
             return 0f
         }
 
-        val maxPower = steeringConfig.maxOutputPowerPercent.toFloat()
+        val maxPower = steeringConfig.maxOutputPowerPercent.toFloat().coerceIn(1f, 100f)
+        val minPower = steeringConfig.minMotorOutputPowerPercent.toFloat().coerceIn(0f, maxPower - 1f)
 
         var rawPower = when (steeringConfig.controlMode) {
             MotorControlMode.PASSES_PER_DEGREE -> {
@@ -77,6 +79,21 @@ class SteeringController {
             rawPower = -rawPower
         }
 
-        return rawPower.coerceIn(-maxPower, maxPower)
+        if (rawPower == 0f) {
+            return 0f
+        }
+
+        // Apply minimum power floor remapping to overcome mechanical steering friction
+        val rawSign = sign(rawPower)
+        val absRaw = abs(rawPower)
+        val clampedAbsRaw = absRaw.coerceAtMost(maxPower)
+
+        val remappedAbs = if (minPower > 0f && maxPower > minPower) {
+            minPower + (clampedAbsRaw / maxPower) * (maxPower - minPower)
+        } else {
+            clampedAbsRaw
+        }
+
+        return (rawSign * remappedAbs).coerceIn(-maxPower, maxPower)
     }
 }

@@ -37,6 +37,7 @@ data class SteeringConfig(
     val ki: Double = 0.0,
     val kd: Double = 0.1,
     val deadbandDegrees: Double = 0.5,
+    val minMotorOutputPowerPercent: Int = 20,
     val maxOutputPowerPercent: Int = 100,
     val invertEncoderSign: Boolean = false,
     val invertMotorOutput: Boolean = false,

@@ -33,6 +33,7 @@ object TractorRepository {
     private const val KEY_KI = "ki"
     private const val KEY_KD = "kd"
     private const val KEY_DEADBAND = "deadband_degrees"
+    private const val KEY_MIN_MOTOR_OUTPUT_POWER = "min_motor_output_power"
     private const val KEY_MAX_OUTPUT_POWER = "max_output_power"
     private const val KEY_INVERT_ENCODER_SIGN = "invert_encoder_sign"
     private const val KEY_INVERT_MOTOR_OUTPUT = "invert_motor_output"
@@ -103,6 +104,7 @@ object TractorRepository {
             ki = prefs.getFloat(KEY_KI, 0.0f).toDouble(),
             kd = prefs.getFloat(KEY_KD, 0.1f).toDouble(),
             deadbandDegrees = prefs.getFloat(KEY_DEADBAND, 0.5f).toDouble(),
+            minMotorOutputPowerPercent = prefs.getInt(KEY_MIN_MOTOR_OUTPUT_POWER, 20),
             maxOutputPowerPercent = prefs.getInt(KEY_MAX_OUTPUT_POWER, 100),
             invertEncoderSign = prefs.getBoolean(KEY_INVERT_ENCODER_SIGN, false),
             invertMotorOutput = prefs.getBoolean(KEY_INVERT_MOTOR_OUTPUT, false),
@@ -130,6 +132,7 @@ object TractorRepository {
             .putFloat(KEY_KI, config.ki.toFloat())
             .putFloat(KEY_KD, config.kd.toFloat())
             .putFloat(KEY_DEADBAND, config.deadbandDegrees.toFloat())
+            .putInt(KEY_MIN_MOTOR_OUTPUT_POWER, config.minMotorOutputPowerPercent)
             .putInt(KEY_MAX_OUTPUT_POWER, config.maxOutputPowerPercent)
             .putBoolean(KEY_INVERT_ENCODER_SIGN, config.invertEncoderSign)
             .putBoolean(KEY_INVERT_MOTOR_OUTPUT, config.invertMotorOutput)

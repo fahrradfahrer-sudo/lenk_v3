@@ -160,7 +160,8 @@ class SteeringTest {
             passesPerDegree = 300,
             encoderCenterOffset = 1000L,
             kp = 2.0,
-            deadbandDegrees = 0.2
+            deadbandDegrees = 0.2,
+            minMotorOutputPowerPercent = 0
         )
 
         val motorTelemetry = MotorTelemetry(encoderCount = 1000L) // wheels straight 0 deg
@@ -259,5 +260,99 @@ class SteeringTest {
         assertEquals(2, lines.size)
         assertTrue(lines[0].contains("CTE: +2.1 cm"))
         assertTrue(lines[1].contains("CTE: -3.5 cm"))
+    }
+
+    @Test
+    fun testMinMotorOutputPowerRemapping() {
+        val controller = SteeringController()
+
+        val configWithMinPower = defaultSteering.copy(
+            minMotorOutputPowerPercent = 20,
+            maxOutputPowerPercent = 100,
+            deadbandDegrees = 0.2,
+            kp = 1.5,
+            passesPerDegree = 300,
+            encoderCenterOffset = 0L
+        )
+
+        val motorTelemetry = MotorTelemetry(encoderCount = 0L)
+
+        // Error = 4.5° -> raw power = 1.5 * 4.5 = 6.75%
+        // Remapped power = 20 + (6.75 / 100) * 80 = 25.4%
+        val powerPos = controller.calculateMotorPowerPercent(4.5, motorTelemetry, configWithMinPower)
+        assertEquals(25.4f, powerPos, 0.2f)
+
+        // Error = -4.5° -> raw power = -6.75%
+        // Remapped power = -25.4%
+        val powerNeg = controller.calculateMotorPowerPercent(-4.5, motorTelemetry, configWithMinPower)
+        assertEquals(-25.4f, powerNeg, 0.2f)
+    }
+
+    @Test
+    fun testInvertEncoderSignAndMotorOutput() {
+        val controller = SteeringController()
+
+        val normalConfig = defaultSteering.copy(
+            passesPerDegree = 300,
+            encoderCenterOffset = 0L,
+            invertEncoderSign = false,
+            invertMotorOutput = false
+        )
+
+        val invertedConfig = defaultSteering.copy(
+            passesPerDegree = 300,
+            encoderCenterOffset = 0L,
+            invertEncoderSign = true,
+            invertMotorOutput = true
+        )
+
+        val teleRightWheel = MotorTelemetry(encoderCount = 3000L) // +10 deg physically
+
+        // Normal: +3000 / 300 = +10.0 deg
+        val angleNormal = controller.estimateCurrentSteeringAngleDegrees(teleRightWheel, normalConfig)
+        assertEquals(10.0, angleNormal, 0.001)
+
+        // Inverted encoder sign: -(+3000) / 300 = -10.0 deg
+        val angleInverted = controller.estimateCurrentSteeringAngleDegrees(teleRightWheel, invertedConfig)
+        assertEquals(-10.0, angleInverted, 0.001)
+    }
+
+    @Test
+    fun testStanleyLowSpeedResponseWithUserParameters() {
+        val northLine = AbLine(UtmPoint(0.0, 0.0), UtmPoint(0.0, 100.0))
+        val userSteering = defaultSteering.copy(
+            algorithm = SteeringAlgorithm.STANLEY,
+            stanleyK = 5.0,
+            stanleyHeadingGain = 1.0
+        )
+
+        // Vehicle is 78 cm left of line (-0.78 m CTE) at 0.9 km/h speed
+        val tractorLeft = UtmPoint(-0.78, 50.0)
+        val angleTarget = SteeringAlgorithms.calculateStanley(
+            groundAxleUtm = tractorLeft,
+            headingDegrees = 356.0, // 4 deg heading error relative to northbound 0 deg
+            speedKmh = 0.9,
+            abLine = northLine,
+            tractorConfig = defaultTractor, // maxSteeringAngle = 35 deg
+            steeringConfig = userSteering
+        )
+
+        // Target angle should be clamped to max steering angle (+35 deg) due to large CTE + high gain
+        assertEquals(35.0, angleTarget, 0.001)
+    }
+
+    @Test
+    fun testConfigDiagnosticEntryFormatting() {
+        val dateFormat = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
+        val timestamp = 1700000000000L
+
+        val configEntry = SteeringDiagnosticEntry(
+            timestampMs = timestamp,
+            configSummary = "Algo: Stanley | Mode: PID | StanleyK: 5.0 | StanleyHdgGain: 1.0"
+        )
+
+        val formatted = configEntry.formatLogLine(dateFormat)
+        val expectedTimeStr = dateFormat.format(java.util.Date(timestamp))
+        assertEquals("[$expectedTimeStr] [CONFIG] Algo: Stanley | Mode: PID | StanleyK: 5.0 | StanleyHdgGain: 1.0", formatted)
     }
 }
