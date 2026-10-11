@@ -59,6 +59,29 @@ class SteeringTest {
     }
 
     @Test
+    fun testComputeGroundFrontAxlePosition() {
+        val rearAxlePos = UtmPoint(500000.0, 5800000.0)
+
+        // Heading North = 0 degrees, Wheelbase = 2.8m
+        val frontAxleNorth = TiltCompensator.computeGroundFrontAxlePosition(
+            groundRearAxleUtm = rearAxlePos,
+            headingDegrees = 0.0,
+            tractorConfig = defaultTractor
+        )
+        assertEquals(500000.0, frontAxleNorth.x, 0.001)
+        assertEquals(5800000.0 + 2.8, frontAxleNorth.y, 0.001)
+
+        // Heading East = 90 degrees
+        val frontAxleEast = TiltCompensator.computeGroundFrontAxlePosition(
+            groundRearAxleUtm = rearAxlePos,
+            headingDegrees = 90.0,
+            tractorConfig = defaultTractor
+        )
+        assertEquals(500000.0 + 2.8, frontAxleEast.x, 0.001)
+        assertEquals(5800000.0, frontAxleEast.y, 0.001)
+    }
+
+    @Test
     fun testTiltCompensationWithRollRight() {
         val antennaPos = UtmPoint(500000.0, 5800000.0)
         val rollDeg = 10.0

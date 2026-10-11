@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.witt3d.autosteer.data.models.AbLine
 import com.witt3d.autosteer.data.models.DriveDirection
 import com.witt3d.autosteer.data.models.GpsConfig
+import com.witt3d.autosteer.data.models.SteeringAlgorithm
 import com.witt3d.autosteer.data.models.GuidanceState
 import com.witt3d.autosteer.data.models.HeadingSource
 import com.witt3d.autosteer.data.models.ImuConfig
@@ -286,6 +287,19 @@ class MainViewModel : ViewModel() {
             tractorConfig = currentTractor
         )
 
+        // Stanley regulates cross-track/heading error at the FRONT axle; Pure Pursuit
+        // at the rear axle. Feeding Stanley the rear-axle point (as before) introduces
+        // a wheelbase-sized bias that grows with heading error.
+        val steeringReferenceUtm = if (currentSteering.algorithm == SteeringAlgorithm.STANLEY) {
+            TiltCompensator.computeGroundFrontAxlePosition(
+                groundRearAxleUtm = groundAxleUtm,
+                headingDegrees = currentTele.headingDegrees,
+                tractorConfig = currentTractor
+            )
+        } else {
+            groundAxleUtm
+        }
+
         val currentMotorTelemetry = motorTelemetry.value
         val currentSteerAngle = steeringController.estimateCurrentSteeringAngleDegrees(
             motorTelemetry = currentMotorTelemetry,
@@ -313,11 +327,11 @@ class MainViewModel : ViewModel() {
         val activeLine = currentGuidance.abLine
 
         if (activeLine != null && activeLine.lengthMeters >= 0.1) {
-            val cteMeters = activeLine.calculateCrossTrackErrorMeters(groundAxleUtm)
+            val cteMeters = activeLine.calculateCrossTrackErrorMeters(steeringReferenceUtm)
             val cteCm = cteMeters * 100.0
 
             val targetSteeringAngle = SteeringAlgorithms.calculateTargetSteeringAngle(
-                groundAxleUtm = groundAxleUtm,
+                groundAxleUtm = steeringReferenceUtm,
                 headingDegrees = currentTele.headingDegrees,
                 speedKmh = currentTele.speedKmh,
                 abLine = activeLine,
