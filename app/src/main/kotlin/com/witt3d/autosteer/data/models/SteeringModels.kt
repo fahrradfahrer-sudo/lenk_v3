@@ -43,5 +43,6 @@ data class SteeringConfig(
     val invertMotorOutput: Boolean = false,
     val enableFiltering: Boolean = true,
     val headingSmoothingAlpha: Double = 0.3,
-    val positionSmoothingAlpha: Double = 0.5
+    val positionSmoothingAlpha: Double = 0.5,
+    val autoSteerLoopFrequencyHz: Int = 10
 )
