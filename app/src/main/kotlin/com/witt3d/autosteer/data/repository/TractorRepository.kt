@@ -40,6 +40,7 @@ object TractorRepository {
     private const val KEY_ENABLE_FILTERING = "enable_filtering"
     private const val KEY_HEADING_SMOOTHING_ALPHA = "heading_smoothing_alpha"
     private const val KEY_POSITION_SMOOTHING_ALPHA = "position_smoothing_alpha"
+    private const val KEY_AUTOSTEER_LOOP_FREQ_HZ = "autosteer_loop_freq_hz"
 
     fun loadTractorConfig(context: Context): TractorConfig {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -110,7 +111,8 @@ object TractorRepository {
             invertMotorOutput = prefs.getBoolean(KEY_INVERT_MOTOR_OUTPUT, false),
             enableFiltering = prefs.getBoolean(KEY_ENABLE_FILTERING, true),
             headingSmoothingAlpha = prefs.getFloat(KEY_HEADING_SMOOTHING_ALPHA, 0.3f).toDouble(),
-            positionSmoothingAlpha = prefs.getFloat(KEY_POSITION_SMOOTHING_ALPHA, 0.5f).toDouble()
+            positionSmoothingAlpha = prefs.getFloat(KEY_POSITION_SMOOTHING_ALPHA, 0.5f).toDouble(),
+            autoSteerLoopFrequencyHz = prefs.getInt(KEY_AUTOSTEER_LOOP_FREQ_HZ, 10)
         )
     }
 
@@ -139,6 +141,7 @@ object TractorRepository {
             .putBoolean(KEY_ENABLE_FILTERING, config.enableFiltering)
             .putFloat(KEY_HEADING_SMOOTHING_ALPHA, config.headingSmoothingAlpha.toFloat())
             .putFloat(KEY_POSITION_SMOOTHING_ALPHA, config.positionSmoothingAlpha.toFloat())
+            .putInt(KEY_AUTOSTEER_LOOP_FREQ_HZ, config.autoSteerLoopFrequencyHz)
             .apply()
     }
 }

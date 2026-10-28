@@ -11,6 +11,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
+import androidx.activity.ComponentActivity
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -18,10 +21,14 @@ import androidx.navigation.compose.rememberNavController
 import com.witt3d.autosteer.ui.screens.FieldManagementScreen
 import com.witt3d.autosteer.ui.screens.MapScreen
 import com.witt3d.autosteer.ui.screens.SettingsScreen
+import com.witt3d.autosteer.viewmodel.MainViewModel
 
 @Composable
 fun MainNavigation() {
     val navController = rememberNavController()
+    val activity = LocalContext.current as ComponentActivity
+    val mainViewModel: MainViewModel = viewModel(activity)
+
     val screens = listOf(
         Screen.Map,
         Screen.FieldManagement,
@@ -59,9 +66,9 @@ fun MainNavigation() {
         }
     ) { innerPadding ->
         NavHost(navController, startDestination = Screen.Map.route, modifier = Modifier.padding(innerPadding)) {
-            composable(Screen.Map.route) { MapScreen() }
+            composable(Screen.Map.route) { MapScreen(viewModel = mainViewModel) }
             composable(Screen.FieldManagement.route) { FieldManagementScreen() }
-            composable(Screen.Settings.route) { SettingsScreen() }
+            composable(Screen.Settings.route) { SettingsScreen(viewModel = mainViewModel) }
         }
     }
 }

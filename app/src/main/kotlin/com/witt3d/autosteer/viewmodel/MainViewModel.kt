@@ -152,15 +152,18 @@ class MainViewModel : ViewModel() {
                     // Update Drive Direction based on position delta vs heading
                     val prevX = lastUtmX
                     val prevY = lastUtmY
-                    if (prevX != null && prevY != null && gpsTele.speedKmh >= 0.8) {
+                    if (prevX != null && prevY != null && gpsTele.speedKmh >= 0.3) {
                         val dx = rawX - prevX
                         val dy = rawY - prevY
                         val movementDist = hypot(dx, dy)
-                        if (movementDist >= 0.1) {
+                        if (movementDist >= 0.05) {
                             var movementHeading = Math.toDegrees(atan2(dx, dy))
                             if (movementHeading < 0) movementHeading += 360.0
 
-                            var angleDiff = movementHeading - smoothHeading
+                            // When IMU is available, compare position movement vector against physical IMU chassis heading
+                            val chassisHeading = imuHandler.telemetry.value.headingDegrees.takeIf { it != 0.0 } ?: smoothHeading
+
+                            var angleDiff = movementHeading - chassisHeading
                             while (angleDiff > 180.0) angleDiff -= 360.0
                             while (angleDiff < -180.0) angleDiff += 360.0
 
@@ -201,11 +204,13 @@ class MainViewModel : ViewModel() {
 
         logSteeringConfigParameters()
 
-        // AutoSteer Control Loop (20Hz = 50ms)
+        // AutoSteer Control Loop
         viewModelScope.launch {
             while (isActive) {
                 processAutoSteerLoop()
-                delay(50)
+                val freq = _steeringConfig.value.autoSteerLoopFrequencyHz.coerceIn(1, 50)
+                val delayMs = (1000L / freq).coerceIn(20L, 1000L)
+                delay(delayMs)
             }
         }
     }
@@ -544,6 +549,9 @@ class MainViewModel : ViewModel() {
         val currentEncoder = motorTelemetry.value.encoderCount
         val updatedConfig = _steeringConfig.value.copy(encoderCenterOffset = currentEncoder)
         updateSteeringConfig(context, updatedConfig)
+        _guidanceState.value = _guidanceState.value.copy(
+            currentSteeringAngleDegrees = 0.0
+        )
     }
 
     // AB Line & Guidance Methods

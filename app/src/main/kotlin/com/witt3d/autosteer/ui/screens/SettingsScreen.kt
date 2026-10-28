@@ -74,6 +74,7 @@ fun SettingsScreen(viewModel: MainViewModel = viewModel()) {
     var minMotorPowerText by remember(steeringConfig.minMotorOutputPowerPercent) { mutableStateOf(steeringConfig.minMotorOutputPowerPercent.toString()) }
     var minHeadingSpeedText by remember(steeringConfig.minHeadingSpeedKmh) { mutableStateOf(steeringConfig.minHeadingSpeedKmh.toString()) }
     var maxMotorCurrentCutoffText by remember(steeringConfig.maxMotorCurrentCutoffAmps) { mutableStateOf(steeringConfig.maxMotorCurrentCutoffAmps.toString()) }
+    var autoSteerFreqText by remember(steeringConfig.autoSteerLoopFrequencyHz) { mutableStateOf(steeringConfig.autoSteerLoopFrequencyHz.toString()) }
     var headingAlphaText by remember(steeringConfig.headingSmoothingAlpha) { mutableStateOf(steeringConfig.headingSmoothingAlpha.toString()) }
     var positionAlphaText by remember(steeringConfig.positionSmoothingAlpha) { mutableStateOf(steeringConfig.positionSmoothingAlpha.toString()) }
 
@@ -250,6 +251,18 @@ fun SettingsScreen(viewModel: MainViewModel = viewModel()) {
                             }
                         },
                         label = { Text("Max Motor Current Cutoff (A)") },
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedTextField(
+                        value = autoSteerFreqText,
+                        onValueChange = {
+                            autoSteerFreqText = it
+                            it.toIntOrNull()?.let { freq ->
+                                val clamped = freq.coerceIn(1, 50)
+                                viewModel.updateSteeringConfig(context, steeringConfig.copy(autoSteerLoopFrequencyHz = clamped))
+                            }
+                        },
+                        label = { Text("Autosteer Loop Freq (Hz)") },
                         modifier = Modifier.weight(1f)
                     )
                 }
