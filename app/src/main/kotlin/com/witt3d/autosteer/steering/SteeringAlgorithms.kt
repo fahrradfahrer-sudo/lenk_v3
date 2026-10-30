@@ -140,9 +140,15 @@ object SteeringAlgorithms {
         val rawCteMeters = abLine.calculateCrossTrackErrorMeters(groundAxleUtm)
         val effectiveCteMeters = rawCteMeters * lineDir
 
+        // When left of line (effectiveCteMeters < 0), crossTrackSteerDeg should be positive (+) to steer RIGHT towards the line.
+        // Therefore, atan2(-stanleyK * effectiveCteMeters, speedMps) correctly yields positive rad when effectiveCteMeters < 0.
         val crossTrackSteerRad = atan2(-steeringConfig.stanleyK * effectiveCteMeters, speedMps)
         val crossTrackSteerDeg = Math.toDegrees(crossTrackSteerRad)
 
+        // Heading error: headingErrorDeg = motionHeading - effectiveLineHeading
+        // E.g., driving North (0 deg) along line (0 deg) -> headingErrorDeg = 0
+        // If pointing East (90 deg), motionHeading (90) - line (0) = +90 deg (turned right of line).
+        // To correct, we need to steer LEFT (negative angle), so heading term must be -(headingGain * headingErrorDeg).
         var totalSteerDeg = -(steeringConfig.stanleyHeadingGain * headingErrorDeg) + crossTrackSteerDeg
 
         if (driveDirection == com.witt3d.autosteer.data.models.DriveDirection.REVERSE) {
