@@ -353,15 +353,63 @@ class SteeringTest {
         val tractorLeft = UtmPoint(-0.78, 50.0)
         val angleTarget = SteeringAlgorithms.calculateStanley(
             groundAxleUtm = tractorLeft,
-            headingDegrees = 356.0, // 4 deg heading error relative to northbound 0 deg
+            headingDegrees = 356.0, // heading error = 356 - 0 = -4 deg (pointing slightly West)
             speedKmh = 0.9,
             abLine = northLine,
             tractorConfig = defaultTractor, // maxSteeringAngle = 35 deg
             steeringConfig = userSteering
         )
 
-        // Target angle should be clamped to max steering angle (+35 deg) due to large CTE + high gain
+        // Target angle should be clamped to max steering angle (+35 deg) due to large CTE + high gain (steer right)
         assertEquals(35.0, angleTarget, 0.001)
+    }
+
+    @Test
+    fun testRealWorldLogScenarioUserLogData() {
+        // Reproducing user's real-world test log scenario:
+        // Northbound AB line (heading 0 deg)
+        val abLine = AbLine(UtmPoint(0.0, 0.0), UtmPoint(0.0, 100.0))
+
+        // Tractor is 77 cm LEFT of line (-0.77 m CTE)
+        val tractorPosLeft = UtmPoint(-0.77, 50.0)
+
+        // Heading is 7 degrees (pointing slightly East), speed 0.8 km/h
+        val headingDeg = 7.0
+        val speedKmh = 0.8
+
+        val stanleyConfig = defaultSteering.copy(
+            algorithm = SteeringAlgorithm.STANLEY,
+            stanleyK = 1.0,
+            stanleyHeadingGain = 1.0
+        )
+
+        val targetAngleStanley = SteeringAlgorithms.calculateStanley(
+            groundAxleUtm = tractorPosLeft,
+            headingDegrees = headingDeg,
+            speedKmh = speedKmh,
+            abLine = abLine,
+            tractorConfig = defaultTractor,
+            steeringConfig = stanleyConfig
+        )
+
+        val purePursuitConfig = defaultSteering.copy(
+            algorithm = SteeringAlgorithm.PURE_PURSUIT,
+            lookaheadDistanceMeters = 4.0,
+            lookaheadSpeedGain = 0.5
+        )
+
+        val targetAnglePurePursuit = SteeringAlgorithms.calculatePurePursuit(
+            groundAxleUtm = tractorPosLeft,
+            headingDegrees = headingDeg,
+            speedKmh = speedKmh,
+            abLine = abLine,
+            tractorConfig = defaultTractor,
+            steeringConfig = purePursuitConfig
+        )
+
+        // When left of line (-0.77m CTE), tractor MUST steer RIGHT (+ deg) towards line
+        assertTrue("Stanley target steering angle must be positive (steer right) when left of line, got $targetAngleStanley", targetAngleStanley > 0.0)
+        assertTrue("Pure Pursuit target steering angle must be positive (steer right) when left of line, got $targetAnglePurePursuit", targetAnglePurePursuit > 0.0)
     }
 
     @Test

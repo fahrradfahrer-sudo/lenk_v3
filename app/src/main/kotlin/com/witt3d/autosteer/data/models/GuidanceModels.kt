@@ -35,14 +35,15 @@ data class AbLine(
 
     /**
      * Calculates signed cross-track error in meters from line AB to point P.
-     * Positive = point is to the RIGHT of line A -> B.
      * Negative = point is to the LEFT of line A -> B.
+     * Positive = point is to the RIGHT of line A -> B.
      */
     fun calculateCrossTrackErrorMeters(point: UtmPoint): Double {
         val len = lengthMeters
         if (len < 1e-6) return 0.0
         val apX = point.x - pointA.x
         val apY = point.y - pointA.y
+        // Left of line A->B => negative (-), Right of line A->B => positive (+)
         return (apX * dy - apY * dx) / len
     }
 
