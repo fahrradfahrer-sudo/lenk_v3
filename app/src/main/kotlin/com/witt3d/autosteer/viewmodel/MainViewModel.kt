@@ -81,6 +81,7 @@ class MainViewModel : ViewModel() {
     private var lastUtmX: Double? = null
     private var lastUtmY: Double? = null
     private var currentDriveDirection: DriveDirection = DriveDirection.FORWARD
+    private var appContext: Context? = null
 
     fun clearSteeringDiagnosticLogs() {
         _steeringDiagnosticLogs.value = emptyList()
@@ -161,7 +162,13 @@ class MainViewModel : ViewModel() {
                             if (movementHeading < 0) movementHeading += 360.0
 
                             // When IMU is available, compare position movement vector against physical IMU chassis heading
-                            val chassisHeading = imuHandler.telemetry.value.headingDegrees.takeIf { it != 0.0 } ?: smoothHeading
+                            val rawImu = imuHandler.telemetry.value.headingDegrees
+                            val chassisHeading = if (rawImu != 0.0) {
+                                var hdg = rawImu + config.headingOffsetDegrees
+                                while (hdg >= 360.0) hdg -= 360.0
+                                while (hdg < 0.0) hdg += 360.0
+                                hdg
+                            } else smoothHeading
 
                             var angleDiff = movementHeading - chassisHeading
                             while (angleDiff > 180.0) angleDiff -= 360.0
@@ -246,19 +253,81 @@ class MainViewModel : ViewModel() {
         speedKmh: Double,
         config: SteeringConfig
     ): Double {
+        val calibratedImu = if (imuHeading != 0.0) {
+            var hdg = imuHeading + config.headingOffsetDegrees
+            while (hdg >= 360.0) hdg -= 360.0
+            while (hdg < 0.0) hdg += 360.0
+            hdg
+        } else 0.0
+
         return when (config.headingSource) {
-            HeadingSource.IMU_ONLY -> imuHeading
-            HeadingSource.GPS_COG_ONLY -> if (gpsHeading != 0.0) gpsHeading else imuHeading
+            HeadingSource.IMU_ONLY -> if (calibratedImu != 0.0) calibratedImu else gpsHeading
+            HeadingSource.GPS_COG_ONLY -> if (gpsHeading != 0.0) gpsHeading else calibratedImu
             HeadingSource.AUTO_FUSED -> {
                 if (speedKmh >= config.minHeadingSpeedKmh && gpsHeading != 0.0) {
                     gpsHeading
-                } else if (imuHeading != 0.0) {
-                    imuHeading
+                } else if (calibratedImu != 0.0) {
+                    calibratedImu
                 } else {
                     gpsHeading
                 }
             }
         }
+    }
+
+    /**
+     * Dynamically auto-calibrates IMU heading offset when driving straight forward above minimum speed.
+     */
+    private fun performAutoHeadingCalibration(
+        rawImuHeading: Double,
+        gpsHeading: Double,
+        speedKmh: Double,
+        wheelAngleDeg: Double,
+        driveDirection: DriveDirection
+    ) {
+        if (rawImuHeading == 0.0 || gpsHeading == 0.0) return
+        if (driveDirection != DriveDirection.FORWARD) return
+        if (speedKmh < _steeringConfig.value.minHeadingSpeedKmh) return
+        if (abs(wheelAngleDeg) > 2.5) return
+
+        val currentConfig = _steeringConfig.value
+        val currentOffset = currentConfig.headingOffsetDegrees
+        var calibratedImu = (rawImuHeading + currentOffset) % 360.0
+        if (calibratedImu < 0) calibratedImu += 360.0
+
+        var error = gpsHeading - calibratedImu
+        while (error > 180.0) error -= 360.0
+        while (error < -180.0) error += 360.0
+
+        if (abs(error) < 45.0 && abs(error) > 0.05) {
+            val alpha = 0.01 // Smooth, subtle convergence
+            var newOffset = currentOffset + alpha * error
+            while (newOffset > 180.0) newOffset -= 360.0
+            while (newOffset < -180.0) newOffset += 360.0
+
+            val updatedConfig = currentConfig.copy(headingOffsetDegrees = newOffset)
+            _steeringConfig.value = updatedConfig
+            appContext?.let { ctx ->
+                TractorRepository.saveSteeringConfig(ctx, updatedConfig)
+            }
+        }
+    }
+
+    fun calibrateHeadingOffset(context: Context): Boolean {
+        appContext = context.applicationContext
+        val currentGpsHeading = gpsHandler.telemetry.value.headingDegrees
+        val currentSpeed = _telemetry.value.speedKmh
+        val rawImuHeading = imuHandler.telemetry.value.headingDegrees
+
+        if (rawImuHeading != 0.0 && currentGpsHeading != 0.0 && currentSpeed >= 1.0) {
+            var diff = currentGpsHeading - rawImuHeading
+            while (diff > 180.0) diff -= 360.0
+            while (diff < -180.0) diff += 360.0
+            val updatedConfig = _steeringConfig.value.copy(headingOffsetDegrees = diff)
+            updateSteeringConfig(context, updatedConfig)
+            return true
+        }
+        return false
     }
 
     private fun smoothAngle(prev: Double?, current: Double, alpha: Double): Double {
@@ -273,6 +342,7 @@ class MainViewModel : ViewModel() {
     }
 
     fun loadPersistedConfigs(context: Context) {
+        appContext = context.applicationContext
         _tractorConfig.value = TractorRepository.loadTractorConfig(context)
         _steeringConfig.value = TractorRepository.loadSteeringConfig(context)
         logSteeringConfigParameters()
@@ -311,6 +381,15 @@ class MainViewModel : ViewModel() {
             steeringConfig = currentSteering
         )
 
+        // Perform background dynamic heading auto-calibration
+        performAutoHeadingCalibration(
+            rawImuHeading = imuHandler.telemetry.value.headingDegrees,
+            gpsHeading = gpsHandler.telemetry.value.headingDegrees,
+            speedKmh = currentTele.speedKmh,
+            wheelAngleDeg = currentSteerAngle,
+            driveDirection = currentTele.driveDirection
+        )
+
         // Motor Over-Current Cutoff Check
         val currentAmps = currentMotorTelemetry.currentAmps
         val maxAllowedCurrent = currentSteering.maxMotorCurrentCutoffAmps
@@ -332,14 +411,17 @@ class MainViewModel : ViewModel() {
         val activeLine = currentGuidance.abLine
 
         if (activeLine != null && activeLine.lengthMeters >= 0.1) {
-            val cteMeters = activeLine.calculateCrossTrackErrorMeters(steeringReferenceUtm)
+            val passWidthMeters = if (currentTractor.trackWidthCm > 50.0) currentTractor.trackWidthCm / 100.0 else 2.0
+            val targetLine = activeLine.getNearestParallelLine(steeringReferenceUtm, passWidthMeters)
+
+            val cteMeters = targetLine.calculateCrossTrackErrorMeters(steeringReferenceUtm)
             val cteCm = cteMeters * 100.0
 
             val targetSteeringAngle = SteeringAlgorithms.calculateTargetSteeringAngle(
                 groundAxleUtm = steeringReferenceUtm,
                 headingDegrees = currentTele.headingDegrees,
                 speedKmh = currentTele.speedKmh,
-                abLine = activeLine,
+                abLine = targetLine,
                 tractorConfig = currentTractor,
                 steeringConfig = currentSteering,
                 driveDirection = currentTele.driveDirection

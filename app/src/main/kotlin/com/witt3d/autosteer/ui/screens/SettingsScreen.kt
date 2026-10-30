@@ -14,6 +14,7 @@ import com.witt3d.autosteer.data.models.HeadingSource
 import com.witt3d.autosteer.data.models.MotorControlMode
 import com.witt3d.autosteer.data.models.MotorType
 import com.witt3d.autosteer.data.models.SteeringAlgorithm
+import java.util.Locale
 import com.witt3d.autosteer.ui.components.DropdownTerminal
 import com.witt3d.autosteer.ui.components.ImuVisualizer3D
 import com.witt3d.autosteer.viewmodel.MainViewModel
@@ -223,6 +224,31 @@ fun SettingsScreen(viewModel: MainViewModel = viewModel()) {
                         onClick = { viewModel.updateSteeringConfig(context, steeringConfig.copy(headingSource = HeadingSource.GPS_COG_ONLY)) },
                         label = { Text("GPS COG Only") }
                     )
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Heading Calibration Section
+                OutlinedCard(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text("IMU Heading Alignment Calibration", style = MaterialTheme.typography.titleMedium)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            "Calibrates IMU yaw angle to match tractor driving direction vector. Current Heading Offset: ${String.format(Locale.US, "%+.1f", steeringConfig.headingOffsetDegrees)}°",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Button(
+                            onClick = {
+                                val success = viewModel.calibrateHeadingOffset(context)
+                                val msg = if (success) "Heading calibrated to driving direction!" else "Move forward straight above 1 km/h with GPS fix to calibrate."
+                                android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("CALIBRATE HEADING TO DRIVING DIRECTION")
+                        }
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(8.dp))
