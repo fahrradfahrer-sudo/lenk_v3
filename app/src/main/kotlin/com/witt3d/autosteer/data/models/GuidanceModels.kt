@@ -60,6 +60,34 @@ data class AbLine(
         val atd = apX * uX + apY * uY
         return UtmPoint(pointA.x + atd * uX, pointA.y + atd * uY)
     }
+
+    /**
+     * Computes the nearest parallel pass line to the given point, spaced by passWidthMeters.
+     * Pass 0 is the original line AB.
+     */
+    fun getNearestParallelLine(point: UtmPoint, passWidthMeters: Double): AbLine {
+        val len = lengthMeters
+        if (len < 1e-6 || passWidthMeters <= 0.0) return this
+
+        val cteMeters = calculateCrossTrackErrorMeters(point)
+        // Pass number: index of the closest parallel line (e.g. -2, -1, 0, 1, 2)
+        val passNumber = kotlin.math.round(cteMeters / passWidthMeters).toInt()
+        if (passNumber == 0) return this
+
+        // Unit vector normal (perpendicular) to vector A -> B pointing RIGHT (+ CTE)
+        // A -> B vector = (dx, dy). Normal to right = (dy / len, -dx / len)
+        val offsetDistance = passNumber * passWidthMeters
+        val nx = dy / len
+        val ny = -dx / len
+
+        val shiftX = nx * offsetDistance
+        val shiftY = ny * offsetDistance
+
+        val newA = UtmPoint(pointA.x + shiftX, pointA.y + shiftY)
+        val newB = UtmPoint(pointB.x + shiftX, pointB.y + shiftY)
+
+        return AbLine(newA, newB)
+    }
 }
 
 data class SteeringDiagnosticEntry(

@@ -413,6 +413,45 @@ class SteeringTest {
     }
 
     @Test
+    fun testNearestParallelLineGuidance() {
+        val originalLine = AbLine(UtmPoint(0.0, 0.0), UtmPoint(0.0, 100.0)) // Northbound line along X=0
+        val passWidth = 3.0 // 3 meters pass width
+
+        // Point at X = 7.0, Y = 50.0 (7 meters right of original AB line)
+        val pointRight = UtmPoint(7.0, 50.0)
+
+        // Nearest pass should be pass #2 (2 * 3.0m = 6.0m shift to X=6.0)
+        val nearestLine = originalLine.getNearestParallelLine(pointRight, passWidth)
+
+        assertEquals(6.0, nearestLine.pointA.x, 0.001)
+        assertEquals(6.0, nearestLine.pointB.x, 0.001)
+
+        // CTE relative to the nearest parallel line should be 7.0 - 6.0 = 1.0 meter
+        val cteToParallel = nearestLine.calculateCrossTrackErrorMeters(pointRight)
+        assertEquals(1.0, cteToParallel, 0.001)
+    }
+
+    @Test
+    fun testHeadingOffsetCalibrationCalculation() {
+        val rawImuHeading = 250.0
+        val realTractorMotionHeading = 275.0 // Tractor moving West-Northwest (275 deg)
+
+        // Calculated offset: 275 - 250 = +25 degrees
+        var headingOffset = realTractorMotionHeading - rawImuHeading
+        while (headingOffset > 180.0) headingOffset -= 360.0
+        while (headingOffset < -180.0) headingOffset += 360.0
+
+        assertEquals(25.0, headingOffset, 0.001)
+
+        // Applying offset to raw IMU heading
+        var calibratedHeading = rawImuHeading + headingOffset
+        while (calibratedHeading >= 360.0) calibratedHeading -= 360.0
+        while (calibratedHeading < 0.0) calibratedHeading += 360.0
+
+        assertEquals(realTractorMotionHeading, calibratedHeading, 0.001)
+    }
+
+    @Test
     fun testConfigDiagnosticEntryFormatting() {
         val dateFormat = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
         val timestamp = 1700000000000L
