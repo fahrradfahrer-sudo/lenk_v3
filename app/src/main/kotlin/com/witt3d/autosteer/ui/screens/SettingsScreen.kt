@@ -65,8 +65,13 @@ fun SettingsScreen(viewModel: MainViewModel = viewModel()) {
     // Steering Algorithm & Motor Tuning State
     var lookaheadDistText by remember(steeringConfig.lookaheadDistanceMeters) { mutableStateOf(steeringConfig.lookaheadDistanceMeters.toString()) }
     var lookaheadGainText by remember(steeringConfig.lookaheadSpeedGain) { mutableStateOf(steeringConfig.lookaheadSpeedGain.toString()) }
+    var minLookaheadDistText by remember(steeringConfig.minLookaheadDistanceMeters) { mutableStateOf(steeringConfig.minLookaheadDistanceMeters.toString()) }
+    var purePursuitIntegralText by remember(steeringConfig.purePursuitIntegralGain) { mutableStateOf(steeringConfig.purePursuitIntegralGain.toString()) }
     var stanleyKText by remember(steeringConfig.stanleyK) { mutableStateOf(steeringConfig.stanleyK.toString()) }
     var stanleyHeadingGainText by remember(steeringConfig.stanleyHeadingGain) { mutableStateOf(steeringConfig.stanleyHeadingGain.toString()) }
+    var stanleySofteningText by remember(steeringConfig.stanleySofteningSpeedMps) { mutableStateOf(steeringConfig.stanleySofteningSpeedMps.toString()) }
+    var stanleyDampingText by remember(steeringConfig.stanleyDampingGain) { mutableStateOf(steeringConfig.stanleyDampingGain.toString()) }
+    var stanleyIntegralText by remember(steeringConfig.stanleyIntegralGain) { mutableStateOf(steeringConfig.stanleyIntegralGain.toString()) }
     var passesPerDegreeText by remember(steeringConfig.passesPerDegree) { mutableStateOf(steeringConfig.passesPerDegree.toString()) }
     var kpText by remember(steeringConfig.kp) { mutableStateOf(steeringConfig.kp.toString()) }
     var kiText by remember(steeringConfig.ki) { mutableStateOf(steeringConfig.ki.toString()) }
@@ -396,6 +401,34 @@ fun SettingsScreen(viewModel: MainViewModel = viewModel()) {
                             modifier = Modifier.weight(1f)
                         )
                     }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = minLookaheadDistText,
+                            onValueChange = {
+                                minLookaheadDistText = it
+                                it.toDoubleOrNull()?.let { mld ->
+                                    viewModel.updateSteeringConfig(context, steeringConfig.copy(minLookaheadDistanceMeters = mld))
+                                }
+                            },
+                            label = { Text("Min Lookahead (m)") },
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = purePursuitIntegralText,
+                            onValueChange = {
+                                purePursuitIntegralText = it
+                                it.toDoubleOrNull()?.let { ig ->
+                                    viewModel.updateSteeringConfig(context, steeringConfig.copy(purePursuitIntegralGain = ig))
+                                }
+                            },
+                            label = { Text("CTE Integral Trim Gain") },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
                 } else {
                     Text("Stanley Parameters:", style = MaterialTheme.typography.titleSmall)
                     Spacer(modifier = Modifier.height(4.dp))
@@ -423,6 +456,45 @@ fun SettingsScreen(viewModel: MainViewModel = viewModel()) {
                                 }
                             },
                             label = { Text("Heading Gain") },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = stanleySofteningText,
+                            onValueChange = {
+                                stanleySofteningText = it
+                                it.toDoubleOrNull()?.let { soft ->
+                                    viewModel.updateSteeringConfig(context, steeringConfig.copy(stanleySofteningSpeedMps = soft))
+                                }
+                            },
+                            label = { Text("Softening Speed (m/s)") },
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = stanleyDampingText,
+                            onValueChange = {
+                                stanleyDampingText = it
+                                it.toDoubleOrNull()?.let { damp ->
+                                    viewModel.updateSteeringConfig(context, steeringConfig.copy(stanleyDampingGain = damp))
+                                }
+                            },
+                            label = { Text("Damping Gain") },
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = stanleyIntegralText,
+                            onValueChange = {
+                                stanleyIntegralText = it
+                                it.toDoubleOrNull()?.let { sig ->
+                                    viewModel.updateSteeringConfig(context, steeringConfig.copy(stanleyIntegralGain = sig))
+                                }
+                            },
+                            label = { Text("Integral Gain") },
                             modifier = Modifier.weight(1f)
                         )
                     }

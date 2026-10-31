@@ -25,8 +25,13 @@ object TractorRepository {
     private const val KEY_MAX_MOTOR_CURRENT_CUTOFF = "max_motor_current_cutoff"
     private const val KEY_LOOKAHEAD_DIST = "lookahead_dist"
     private const val KEY_LOOKAHEAD_GAIN = "lookahead_gain"
+    private const val KEY_MIN_LOOKAHEAD_DIST = "min_lookahead_dist"
+    private const val KEY_PURE_PURSUIT_INTEGRAL_GAIN = "pure_pursuit_integral_gain"
     private const val KEY_STANLEY_K = "stanley_k"
     private const val KEY_STANLEY_HEADING_GAIN = "stanley_heading_gain"
+    private const val KEY_STANLEY_SOFTENING_SPEED = "stanley_softening_speed"
+    private const val KEY_STANLEY_DAMPING_GAIN = "stanley_damping_gain"
+    private const val KEY_STANLEY_INTEGRAL_GAIN = "stanley_integral_gain"
     private const val KEY_PASSES_PER_DEGREE = "passes_per_degree"
     private const val KEY_ENCODER_CENTER_OFFSET = "encoder_center_offset"
     private const val KEY_KP = "kp"
@@ -98,8 +103,13 @@ object TractorRepository {
             maxMotorCurrentCutoffAmps = prefs.getFloat(KEY_MAX_MOTOR_CURRENT_CUTOFF, 15.0f).toDouble(),
             lookaheadDistanceMeters = prefs.getFloat(KEY_LOOKAHEAD_DIST, 4.0f).toDouble(),
             lookaheadSpeedGain = prefs.getFloat(KEY_LOOKAHEAD_GAIN, 0.5f).toDouble(),
+            minLookaheadDistanceMeters = prefs.getFloat(KEY_MIN_LOOKAHEAD_DIST, 2.0f).toDouble(),
+            purePursuitIntegralGain = prefs.getFloat(KEY_PURE_PURSUIT_INTEGRAL_GAIN, 0.1f).toDouble(),
             stanleyK = prefs.getFloat(KEY_STANLEY_K, 1.0f).toDouble(),
             stanleyHeadingGain = prefs.getFloat(KEY_STANLEY_HEADING_GAIN, 1.0f).toDouble(),
+            stanleySofteningSpeedMps = prefs.getFloat(KEY_STANLEY_SOFTENING_SPEED, 1.2f).toDouble(),
+            stanleyDampingGain = prefs.getFloat(KEY_STANLEY_DAMPING_GAIN, 0.5f).toDouble(),
+            stanleyIntegralGain = prefs.getFloat(KEY_STANLEY_INTEGRAL_GAIN, 0.05f).toDouble(),
             passesPerDegree = prefs.getInt(KEY_PASSES_PER_DEGREE, 300),
             encoderCenterOffset = prefs.getLong(KEY_ENCODER_CENTER_OFFSET, 0L),
             kp = prefs.getFloat(KEY_KP, 1.5f).toDouble(),
@@ -128,8 +138,13 @@ object TractorRepository {
             .putFloat(KEY_MAX_MOTOR_CURRENT_CUTOFF, config.maxMotorCurrentCutoffAmps.toFloat())
             .putFloat(KEY_LOOKAHEAD_DIST, config.lookaheadDistanceMeters.toFloat())
             .putFloat(KEY_LOOKAHEAD_GAIN, config.lookaheadSpeedGain.toFloat())
+            .putFloat(KEY_MIN_LOOKAHEAD_DIST, config.minLookaheadDistanceMeters.toFloat())
+            .putFloat(KEY_PURE_PURSUIT_INTEGRAL_GAIN, config.purePursuitIntegralGain.toFloat())
             .putFloat(KEY_STANLEY_K, config.stanleyK.toFloat())
             .putFloat(KEY_STANLEY_HEADING_GAIN, config.stanleyHeadingGain.toFloat())
+            .putFloat(KEY_STANLEY_SOFTENING_SPEED, config.stanleySofteningSpeedMps.toFloat())
+            .putFloat(KEY_STANLEY_DAMPING_GAIN, config.stanleyDampingGain.toFloat())
+            .putFloat(KEY_STANLEY_INTEGRAL_GAIN, config.stanleyIntegralGain.toFloat())
             .putInt(KEY_PASSES_PER_DEGREE, config.passesPerDegree)
             .putLong(KEY_ENCODER_CENTER_OFFSET, config.encoderCenterOffset)
             .putFloat(KEY_KP, config.kp.toFloat())
