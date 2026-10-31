@@ -343,10 +343,12 @@ class SteeringTest {
     @Test
     fun testStanleyLowSpeedResponseWithUserParameters() {
         val northLine = AbLine(UtmPoint(0.0, 0.0), UtmPoint(0.0, 100.0))
+        SteeringAlgorithms.resetState()
         val userSteering = defaultSteering.copy(
             algorithm = SteeringAlgorithm.STANLEY,
             stanleyK = 5.0,
-            stanleyHeadingGain = 1.0
+            stanleyHeadingGain = 1.0,
+            stanleySofteningSpeedMps = 0.1 // small softening to test clamping behavior
         )
 
         // Vehicle is 78 cm left of line (-0.78 m CTE) at 0.9 km/h speed
@@ -362,6 +364,166 @@ class SteeringTest {
 
         // Target angle should be clamped to max steering angle (+35 deg) due to large CTE + high gain (steer right)
         assertEquals(35.0, angleTarget, 0.001)
+    }
+
+    @Test
+    fun testStanleySofteningReducesLowSpeedExcessiveSteering() {
+        val northLine = AbLine(UtmPoint(0.0, 0.0), UtmPoint(0.0, 100.0))
+        SteeringAlgorithms.resetState()
+
+        // CTE = 30 cm right of line (+0.30m), speed = 3.6 km/h (1.0 m/s), heading matches line (0 deg)
+        val tractorPos = UtmPoint(0.30, 50.0)
+
+        // Without softening (softening = 0.1)
+        val unsoftenedConfig = defaultSteering.copy(
+            algorithm = SteeringAlgorithm.STANLEY,
+            stanleyK = 1.0,
+            stanleyHeadingGain = 1.0,
+            stanleySofteningSpeedMps = 0.1,
+            stanleyDampingGain = 0.0,
+            stanleyIntegralGain = 0.0
+        )
+        val unsoftenedAngle = SteeringAlgorithms.calculateStanley(
+            groundAxleUtm = tractorPos,
+            headingDegrees = 0.0,
+            speedKmh = 3.6,
+            abLine = northLine,
+            tractorConfig = defaultTractor,
+            steeringConfig = unsoftenedAngleConfig(unsoftenedConfig)
+        )
+
+        // With default softening (softening = 1.2 m/s)
+        val softenedConfig = defaultSteering.copy(
+            algorithm = SteeringAlgorithm.STANLEY,
+            stanleyK = 1.0,
+            stanleyHeadingGain = 1.0,
+            stanleySofteningSpeedMps = 1.2,
+            stanleyDampingGain = 0.0,
+            stanleyIntegralGain = 0.0
+        )
+        val softenedAngle = SteeringAlgorithms.calculateStanley(
+            groundAxleUtm = tractorPos,
+            headingDegrees = 0.0,
+            speedKmh = 3.6,
+            abLine = northLine,
+            tractorConfig = defaultTractor,
+            steeringConfig = softenedConfig
+        )
+
+        // Softened target angle magnitude should be significantly smaller (gentler, more stable) than unsoftened
+        assertTrue("Softened angle ($softenedAngle) should have smaller magnitude than unsoftened ($unsoftenedAngle)",
+            kotlin.math.abs(softenedAngle) < kotlin.math.abs(unsoftenedAngle))
+    }
+
+    private fun unsoftenedAngleConfig(base: SteeringConfig) = base.copy(stanleySofteningSpeedMps = 0.1)
+
+    @Test
+    fun testStanleyDampingUnwindsSteeringWhenApproachingLine() {
+        val northLine = AbLine(UtmPoint(0.0, 0.0), UtmPoint(0.0, 100.0))
+        SteeringAlgorithms.resetState()
+
+        val dampedConfig = defaultSteering.copy(
+            algorithm = SteeringAlgorithm.STANLEY,
+            stanleyK = 1.0,
+            stanleyHeadingGain = 1.0,
+            stanleySofteningSpeedMps = 1.2,
+            stanleyDampingGain = 0.5,
+            stanleyIntegralGain = 0.0
+        )
+
+        // Step 1: Tractor at CTE = +0.20m, heading = 350 deg (pointing 10 deg left, towards line)
+        SteeringAlgorithms.calculateStanley(
+            groundAxleUtm = UtmPoint(0.20, 50.0),
+            headingDegrees = 350.0,
+            speedKmh = 3.0,
+            abLine = northLine,
+            tractorConfig = defaultTractor,
+            steeringConfig = dampedConfig,
+            dtSec = 0.1
+        )
+
+        // Step 2: 0.1s later, tractor moves closer to line: CTE = +0.12m
+        val step2Damped = SteeringAlgorithms.calculateStanley(
+            groundAxleUtm = UtmPoint(0.12, 50.0),
+            headingDegrees = 350.0,
+            speedKmh = 3.0,
+            abLine = northLine,
+            tractorConfig = defaultTractor,
+            steeringConfig = dampedConfig,
+            dtSec = 0.1
+        )
+
+        // Without damping:
+        SteeringAlgorithms.resetState()
+        val undampedConfig = dampedConfig.copy(stanleyDampingGain = 0.0)
+        SteeringAlgorithms.calculateStanley(
+            groundAxleUtm = UtmPoint(0.20, 50.0),
+            headingDegrees = 350.0,
+            speedKmh = 3.0,
+            abLine = northLine,
+            tractorConfig = defaultTractor,
+            steeringConfig = undampedConfig,
+            dtSec = 0.1
+        )
+        val step2Undamped = SteeringAlgorithms.calculateStanley(
+            groundAxleUtm = UtmPoint(0.12, 50.0),
+            headingDegrees = 350.0,
+            speedKmh = 3.0,
+            abLine = northLine,
+            tractorConfig = defaultTractor,
+            steeringConfig = undampedConfig,
+            dtSec = 0.1
+        )
+
+        // Because CTE is rapidly decreasing (approaching line), damping applies positive counter-steering
+        // so step2Damped unwinds faster toward 0 / opposite direction compared to step2Undamped.
+        assertTrue("Damped target ($step2Damped) should be more positive than undamped ($step2Undamped)",
+            step2Damped > step2Undamped)
+    }
+
+    @Test
+    fun testPurePursuitAutomaticIntegralEliminatesSteadyStateOffset() {
+        val northLine = AbLine(UtmPoint(0.0, 0.0), UtmPoint(0.0, 100.0))
+        SteeringAlgorithms.resetState()
+
+        val ppConfig = defaultSteering.copy(
+            algorithm = SteeringAlgorithm.PURE_PURSUIT,
+            purePursuitIntegralGain = 0.2,
+            lookaheadDistanceMeters = 4.0,
+            lookaheadSpeedGain = 0.0
+        )
+
+        // Tractor steady at CTE = +0.30m (30cm right of line), heading parallel to line (0 deg)
+        val steadyPos = UtmPoint(0.30, 50.0)
+
+        // Initial target angle with 0 integral
+        val initialTarget = SteeringAlgorithms.calculatePurePursuit(
+            groundAxleUtm = steadyPos,
+            headingDegrees = 0.0,
+            speedKmh = 2.0,
+            abLine = northLine,
+            tractorConfig = defaultTractor,
+            steeringConfig = ppConfig,
+            dtSec = 0.1
+        )
+
+        // Simulate 20 control cycles at CTE = +0.30m (persisting offset)
+        var accumulatedTarget = initialTarget
+        for (i in 1..20) {
+            accumulatedTarget = SteeringAlgorithms.calculatePurePursuit(
+                groundAxleUtm = steadyPos,
+                headingDegrees = 0.0,
+                speedKmh = 2.0,
+                abLine = northLine,
+                tractorConfig = defaultTractor,
+                steeringConfig = ppConfig,
+                dtSec = 0.1
+            )
+        }
+
+        // Target steering should steer MORE strongly to the left (more negative) due to integral action
+        assertTrue("Target with accumulated integral ($accumulatedTarget) must be more negative than initial ($initialTarget)",
+            accumulatedTarget < initialTarget)
     }
 
     @Test

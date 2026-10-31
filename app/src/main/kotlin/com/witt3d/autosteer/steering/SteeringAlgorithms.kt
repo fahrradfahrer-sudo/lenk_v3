@@ -15,6 +15,21 @@ import kotlin.math.sin
 
 object SteeringAlgorithms {
 
+    // Dynamic state for integral offset correction & derivative damping
+    private var purePursuitIntegralMeters = 0.0
+    private var stanleyIntegralMeters = 0.0
+    private var lastStanleyCteMeters: Double? = null
+    private var lastHeadingErrorDeg: Double? = null
+    private var lastTimestampMs = 0L
+
+    fun resetState() {
+        purePursuitIntegralMeters = 0.0
+        stanleyIntegralMeters = 0.0
+        lastStanleyCteMeters = null
+        lastHeadingErrorDeg = null
+        lastTimestampMs = 0L
+    }
+
     /**
      * Calculates target steering angle in degrees based on the configured algorithm.
      */
@@ -25,20 +40,22 @@ object SteeringAlgorithms {
         abLine: AbLine,
         tractorConfig: TractorConfig,
         steeringConfig: SteeringConfig,
-        driveDirection: com.witt3d.autosteer.data.models.DriveDirection = com.witt3d.autosteer.data.models.DriveDirection.FORWARD
+        driveDirection: com.witt3d.autosteer.data.models.DriveDirection = com.witt3d.autosteer.data.models.DriveDirection.FORWARD,
+        dtSec: Double = 0.1
     ): Double {
         return when (steeringConfig.algorithm) {
             SteeringAlgorithm.PURE_PURSUIT -> calculatePurePursuit(
-                groundAxleUtm, headingDegrees, speedKmh, abLine, tractorConfig, steeringConfig, driveDirection
+                groundAxleUtm, headingDegrees, speedKmh, abLine, tractorConfig, steeringConfig, driveDirection, dtSec
             )
             SteeringAlgorithm.STANLEY -> calculateStanley(
-                groundAxleUtm, headingDegrees, speedKmh, abLine, tractorConfig, steeringConfig, driveDirection
+                groundAxleUtm, headingDegrees, speedKmh, abLine, tractorConfig, steeringConfig, driveDirection, dtSec
             )
         }
     }
 
     /**
-     * Pure Pursuit Algorithm Implementation
+     * Pure Pursuit Algorithm Implementation with configurable lookahead clamp
+     * and automatic cross-track integral trim to eliminate steady-state offsets.
      */
     fun calculatePurePursuit(
         groundAxleUtm: UtmPoint,
@@ -47,12 +64,14 @@ object SteeringAlgorithms {
         abLine: AbLine,
         tractorConfig: TractorConfig,
         steeringConfig: SteeringConfig,
-        driveDirection: com.witt3d.autosteer.data.models.DriveDirection = com.witt3d.autosteer.data.models.DriveDirection.FORWARD
+        driveDirection: com.witt3d.autosteer.data.models.DriveDirection = com.witt3d.autosteer.data.models.DriveDirection.FORWARD,
+        dtSec: Double = 0.1
     ): Double {
         val speedMps = max(speedKmh / 3.6, 0.0)
+        val minLookahead = max(steeringConfig.minLookaheadDistanceMeters, 0.5)
         val lookaheadDist = max(
             steeringConfig.lookaheadDistanceMeters + steeringConfig.lookaheadSpeedGain * speedMps,
-            1.0
+            minLookahead
         )
 
         val lineLen = abLine.lengthMeters
@@ -76,6 +95,10 @@ object SteeringAlgorithms {
         // Project axle position on AB line
         val projPoint = abLine.projectPoint(groundAxleUtm)
 
+        // Raw and effective signed cross-track error
+        val rawCteMeters = abLine.calculateCrossTrackErrorMeters(groundAxleUtm)
+        val effectiveCteMeters = rawCteMeters * lineDir
+
         // Target lookahead point on AB line along path direction
         val targetX = projPoint.x + lineUx * lookaheadDist * lineDir
         val targetY = projPoint.y + lineUy * lookaheadDist * lineDir
@@ -97,7 +120,20 @@ object SteeringAlgorithms {
             curvature = -curvature
         }
 
-        var steeringAngleDeg = Math.toDegrees(atan(curvature * wheelbaseM))
+        var baseSteeringAngleDeg = Math.toDegrees(atan(curvature * wheelbaseM))
+
+        // Automatic cross-track integral trim to eliminate steady-state offsets (PI Pure Pursuit)
+        val iGain = steeringConfig.purePursuitIntegralGain
+        var integralTrimDeg = 0.0
+        if (iGain > 0.0 && dtSec > 0.0 && speedMps > 0.1) {
+            purePursuitIntegralMeters += effectiveCteMeters * dtSec
+            // Anti-windup clamping to +/- 10.0 meters*sec
+            purePursuitIntegralMeters = purePursuitIntegralMeters.coerceIn(-10.0, 10.0)
+            // When CTE > 0 (right of line), steer left (negative angle)
+            integralTrimDeg = -iGain * purePursuitIntegralMeters
+        }
+
+        var steeringAngleDeg = baseSteeringAngleDeg + integralTrimDeg
 
         // Clamp to max tractor steering angle
         val maxAngle = tractorConfig.maxSteeringAngleDegrees
@@ -107,7 +143,8 @@ object SteeringAlgorithms {
     }
 
     /**
-     * Stanley Algorithm Implementation
+     * Stanley Algorithm Implementation with low-speed softening constant (k_soft),
+     * heading/CTE derivative damping to eliminate overshoot, and automatic integral trim.
      */
     fun calculateStanley(
         groundAxleUtm: UtmPoint,
@@ -116,9 +153,10 @@ object SteeringAlgorithms {
         abLine: AbLine,
         tractorConfig: TractorConfig,
         steeringConfig: SteeringConfig,
-        driveDirection: com.witt3d.autosteer.data.models.DriveDirection = com.witt3d.autosteer.data.models.DriveDirection.FORWARD
+        driveDirection: com.witt3d.autosteer.data.models.DriveDirection = com.witt3d.autosteer.data.models.DriveDirection.FORWARD,
+        dtSec: Double = 0.1
     ): Double {
-        val speedMps = max(speedKmh / 3.6, 0.1) // minimum 0.1 m/s to prevent division by near zero while preserving low-speed responsiveness
+        val speedMps = max(speedKmh / 3.6, 0.0)
 
         val motionHeading = if (driveDirection == com.witt3d.autosteer.data.models.DriveDirection.REVERSE) {
             (headingDegrees + 180.0) % 360.0
@@ -140,16 +178,46 @@ object SteeringAlgorithms {
         val rawCteMeters = abLine.calculateCrossTrackErrorMeters(groundAxleUtm)
         val effectiveCteMeters = rawCteMeters * lineDir
 
-        // When left of line (effectiveCteMeters < 0), crossTrackSteerDeg should be positive (+) to steer RIGHT towards the line.
-        // Therefore, atan2(-stanleyK * effectiveCteMeters, speedMps) correctly yields positive rad when effectiveCteMeters < 0.
-        val crossTrackSteerRad = atan2(-steeringConfig.stanleyK * effectiveCteMeters, speedMps)
+        // Softened velocity denominator prevents low-speed gain explosion and limit cycling:
+        // atan2(-k * effectiveCte, v + k_soft)
+        val softeningMps = max(steeringConfig.stanleySofteningSpeedMps, 0.1)
+        val effectiveVelocity = speedMps + softeningMps
+
+        // When left of line (effectiveCteMeters < 0), crossTrackSteerDeg is positive (+) to steer RIGHT towards the line.
+        val crossTrackSteerRad = atan2(-steeringConfig.stanleyK * effectiveCteMeters, effectiveVelocity)
         val crossTrackSteerDeg = Math.toDegrees(crossTrackSteerRad)
 
-        // Heading error: headingErrorDeg = motionHeading - effectiveLineHeading
-        // E.g., driving North (0 deg) along line (0 deg) -> headingErrorDeg = 0
-        // If pointing East (90 deg), motionHeading (90) - line (0) = +90 deg (turned right of line).
-        // To correct, we need to steer LEFT (negative angle), so heading term must be -(headingGain * headingErrorDeg).
-        var totalSteerDeg = -(steeringConfig.stanleyHeadingGain * headingErrorDeg) + crossTrackSteerDeg
+        // Heading error term: -(headingGain * headingErrorDeg)
+        val headingTermDeg = -(steeringConfig.stanleyHeadingGain * headingErrorDeg)
+
+        // Damping term to anticipate line arrival and unwind steering before crossing:
+        // When vehicle is pointing into the line (e.g. headingError negative while CTE positive),
+        // vehicle is approaching the line at rate ~ v * sin(headingError).
+        // Damping term opposes rate-of-change of CTE (-Kd * d(CTE)/dt) to unwind steering smoothly
+        // before crossing the line and prevent overshooting.
+        var dampingTermDeg = 0.0
+        val prevCte = lastStanleyCteMeters
+        if (steeringConfig.stanleyDampingGain > 0.0 && dtSec > 0.0 && prevCte != null) {
+            val deltaCte = effectiveCteMeters - prevCte
+            // Only differentiate continuous tracking, ignoring discontinuous line switches or jump calls (> 1.0 m)
+            if (abs(deltaCte) <= 1.0) {
+                val cteRateOfChange = deltaCte / dtSec
+                dampingTermDeg = (-steeringConfig.stanleyDampingGain * cteRateOfChange * 5.0).coerceIn(-15.0, 15.0)
+            }
+        }
+        lastStanleyCteMeters = effectiveCteMeters
+        lastHeadingErrorDeg = headingErrorDeg
+
+        // Cross-track integral term to eliminate steady-state mechanical alignment or side-slope bias
+        val iGain = steeringConfig.stanleyIntegralGain
+        var integralTermDeg = 0.0
+        if (iGain > 0.0 && dtSec > 0.0 && speedMps > 0.1) {
+            stanleyIntegralMeters += effectiveCteMeters * dtSec
+            stanleyIntegralMeters = stanleyIntegralMeters.coerceIn(-10.0, 10.0)
+            integralTermDeg = -iGain * stanleyIntegralMeters * 10.0
+        }
+
+        var totalSteerDeg = headingTermDeg + crossTrackSteerDeg + dampingTermDeg + integralTermDeg
 
         if (driveDirection == com.witt3d.autosteer.data.models.DriveDirection.REVERSE) {
             totalSteerDeg = -totalSteerDeg

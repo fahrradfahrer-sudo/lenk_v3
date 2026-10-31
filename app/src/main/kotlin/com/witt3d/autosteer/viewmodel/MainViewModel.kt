@@ -81,6 +81,7 @@ class MainViewModel : ViewModel() {
     private var lastUtmX: Double? = null
     private var lastUtmY: Double? = null
     private var currentDriveDirection: DriveDirection = DriveDirection.FORWARD
+    private var lastAutoSteerTimestampMs: Long = 0L
     private var appContext: Context? = null
 
     fun clearSteeringDiagnosticLogs() {
@@ -225,12 +226,17 @@ class MainViewModel : ViewModel() {
     fun logSteeringConfigParameters() {
         val config = _steeringConfig.value
         val tractor = _tractorConfig.value
-        val summary = "Algo: %s | Mode: %s | StanleyK: %.1f | StanleyHdgGain: %.1f | Kp: %.1f | Ki: %.1f | Kd: %.1f | MinPwr: %d%% | MaxPwr: %d%% | MaxSteer: %.0f° | EncInvert: %b | MtrInvert: %b".format(
+        val summary = "Algo: %s | Mode: %s | StanleyK: %.1f | StanleyHdgGain: %.1f | Soften: %.1f | Damp: %.2f | StanInt: %.2f | PP_Int: %.2f | MinLA: %.1fm | Kp: %.1f | Ki: %.1f | Kd: %.1f | MinPwr: %d%% | MaxPwr: %d%% | MaxSteer: %.0f° | EncInvert: %b | MtrInvert: %b".format(
             Locale.US,
             config.algorithm.displayName,
             config.controlMode.displayName,
             config.stanleyK,
             config.stanleyHeadingGain,
+            config.stanleySofteningSpeedMps,
+            config.stanleyDampingGain,
+            config.stanleyIntegralGain,
+            config.purePursuitIntegralGain,
+            config.minLookaheadDistanceMeters,
             config.kp,
             config.ki,
             config.kd,
@@ -411,6 +417,14 @@ class MainViewModel : ViewModel() {
         val activeLine = currentGuidance.abLine
 
         if (activeLine != null && activeLine.lengthMeters >= 0.1) {
+            val nowMs = System.currentTimeMillis()
+            val dtSec = if (lastAutoSteerTimestampMs > 0L) {
+                ((nowMs - lastAutoSteerTimestampMs) / 1000.0).coerceIn(0.01, 0.5)
+            } else {
+                1.0 / currentSteering.autoSteerLoopFrequencyHz.coerceIn(1, 50).toDouble()
+            }
+            lastAutoSteerTimestampMs = nowMs
+
             val passWidthMeters = if (currentTractor.trackWidthCm > 50.0) currentTractor.trackWidthCm / 100.0 else 2.0
             val targetLine = activeLine.getNearestParallelLine(steeringReferenceUtm, passWidthMeters)
 
@@ -424,7 +438,8 @@ class MainViewModel : ViewModel() {
                 abLine = targetLine,
                 tractorConfig = currentTractor,
                 steeringConfig = currentSteering,
-                driveDirection = currentTele.driveDirection
+                driveDirection = currentTele.driveDirection,
+                dtSec = dtSec
             )
 
             val motorPower = steeringController.calculateMotorPowerPercent(
@@ -624,6 +639,7 @@ class MainViewModel : ViewModel() {
         TractorRepository.saveSteeringConfig(context, newConfig)
         _steeringConfig.value = newConfig
         steeringController.resetPid()
+        SteeringAlgorithms.resetState()
         logSteeringConfigParameters()
     }
 
@@ -663,6 +679,7 @@ class MainViewModel : ViewModel() {
 
     fun clearAbLine() {
         disengageAutoSteer()
+        SteeringAlgorithms.resetState()
         _guidanceState.value = _guidanceState.value.copy(
             pointA = null,
             pointB = null,
@@ -680,6 +697,9 @@ class MainViewModel : ViewModel() {
         } else {
             if (current.abLine != null && current.abLine.lengthMeters >= 0.1) {
                 logSteeringConfigParameters()
+                SteeringAlgorithms.resetState()
+                steeringController.resetPid()
+                lastAutoSteerTimestampMs = 0L
                 _guidanceState.value = current.copy(
                     isAutoSteerEngaged = true,
                     steeringStatusMessage = "AUTOSTEER ENGAGED"
@@ -695,6 +715,8 @@ class MainViewModel : ViewModel() {
     fun disengageAutoSteer() {
         motorHandler.setTargetPowerPercent(0f)
         steeringController.resetPid()
+        SteeringAlgorithms.resetState()
+        lastAutoSteerTimestampMs = 0L
         _guidanceState.value = _guidanceState.value.copy(
             isAutoSteerEngaged = false,
             steeringStatusMessage = "AutoSteer Disengaged"
